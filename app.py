@@ -1,15 +1,13 @@
-# app.py
 import streamlit as st
 from logic.momentum import get_momentum_df
-from logic.backtest import run_backtest
+from logic.backtest import run_backtest  # keep for future use
 import pandas as pd
 
 st.set_page_config(page_title="Momentum + FIP Screener", layout="wide")
 
 st.title("📈 Momentum Investing Strategy Dashboard")
 
-# Tabbed layout
-tab1, tab2, tab3 = st.tabs(["📋 Nifty 500 List", "🚀 Top 30 Momentum Picks", "⏳ Backtest Strategy"])
+tab1, tab2, tab3 = st.tabs(["📋 Nifty 500 List", "🚀 Momentum + FIP Picks", "⏳ Backtest Strategy"])
 
 # --- Tab 1: Nifty 500 List ---
 with tab1:
@@ -17,15 +15,25 @@ with tab1:
     nifty_df = pd.read_csv("data/nifty500.csv")
     st.dataframe(nifty_df)
 
-# --- Tab 2: Top 30 Momentum Picks ---
+# --- Tab 2: Momentum + FIP Picks ---
 with tab2:
-    st.header("🚀 Top 30 Momentum + FIP Picks (Live)")
+    st.header("🚀 Stable Momentum + FIP Picks (Live)")
     with st.spinner("Fetching latest data..."):
-        top_df = get_momentum_df()
-    if top_df.empty:
+        momentum_df = get_momentum_df()
+
+    if momentum_df.empty:
         st.warning("No stocks passed the filters.")
     else:
-        st.dataframe(top_df)
+        # Columns to show: company name, symbol, ISIN, 11 month returns, momentum score, FIP score
+        month_range = pd.date_range(
+            start=pd.Timestamp.today().replace(day=1) - pd.DateOffset(months=12),
+            periods=11,
+            freq='MS'
+        )
+        month_labels = [d.strftime('%b %Y') for d in month_range]
+
+        display_columns = ["Company Name", "Symbol", "ISIN Code"] + month_labels + ["momentum_score", "fip_score"]
+        st.dataframe(momentum_df[display_columns])
 
 # --- Tab 3: Backtest Strategy ---
 with tab3:
