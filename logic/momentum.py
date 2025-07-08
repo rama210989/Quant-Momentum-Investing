@@ -54,14 +54,15 @@ def get_momentum_df():
                 "fip_score": round(fip, 3)
             }
 
-            if result["fip_score"] < 0:  # Only stable stocks with negative FIP
-                results.append(result)
+            # Append all stocks regardless of FIP score
+            results.append(result)
+
         except Exception:
             continue
 
     momentum_df = pd.DataFrame(results)
 
-    # Sort descending on momentum_score (no top N filter)
+    # Sort descending on momentum_score
     if not momentum_df.empty:
         momentum_df = momentum_df.sort_values(by="momentum_score", ascending=False).reset_index(drop=True)
 
