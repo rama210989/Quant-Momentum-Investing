@@ -331,409 +331,6 @@ else:
     st.sidebar.write(f"**{next_rebalancing['month']} {next_rebalancing['year']}**")
     st.sidebar.write(f"⏰ **{next_rebalancing['days_until']} days to go**")
 
-# Create main tab structure
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Fetch Data", "📋 All Results", "🎯 Top 25 Stable Stocks", "🔔 Alerts", "📈 Backtest"])
-
-with tab1:
-    st.header("📊 Fetch Stock Data")
-    
-    # Data source selection
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        data_source = st.selectbox(
-            "Select Data Source",
-            ["NIFTY 100 + NIFTY MIDCAP 150 (Combined)", "NIFTY 100 Only", "NIFTY MIDCAP 150 Only", "Upload CSV File"],
-            index=0
-        )
-    
-    with col2:
-        st.info(f"""
-        **Analysis Settings:**
-        - Period: {month_labels[0]} to {month_labels[-1]}
-        - Rolling Window: 11 months
-        - Auto-updates monthly
-        """)
-    
-    # Data fetching based on selection
-    if data_source == "Upload CSV File":
-        uploaded_file = st.file_uploader(
-            "Upload CSV file with stock symbols",
-            type=['csv'],
-            help="CSV should contain columns: 'Symbol', 'Company Name', 'ISIN Code'"
-        )
-        
-        if uploaded_file is not None:
-            try:
-                df = pd.read_csv(uploaded_file)
-                if validate_csv(df):
-                    st.session_state.stock_data = df
-                    st.success(f"✅ Loaded {len(df)} stocks from uploaded file")
-                    st.dataframe(df.head(10), use_container_width=True)
-            except Exception as e:
-                st.error(f"Error reading CSV file: {e}")
-    else:
-        # Fetch from predefined indices
-        if st.button("🔄 Fetch Current Index Data", type="primary"):
-            with st.spinner("Fetching latest stock data..."):
-                try:
-                    if data_source == "NIFTY 100 + NIFTY MIDCAP 150 (Combined)":
-                        stock_data = fetch_stock_data_cache("combined")
-                    elif data_source == "NIFTY 100 Only":
-                        stock_data = fetch_stock_data_cache("nifty100")
-                    elif data_source == "NIFTY MIDCAP 150 Only":
-                        stock_data = fetch_stock_data_cache("midcap150")
-                    
-                    st.session_state.stock_data = stock_data
-                    st.success(f"✅ Fetched {len(stock_data)} stocks from {data_source}")
-                    
-                    # Display sample data
-                    st.subheader("Sample Stock Data")
-                    st.dataframe(stock_data.head(10), use_container_width=True)
-                    
-                    # Show summary statistics
-                    st.subheader("Data Summary")
-                    st.write(f"**Total Stocks:** {len(stock_data)}")
-                    st.write(f"**Unique Companies:** {stock_data['Company Name'].nunique()}")
-                    st.write(f"**Data Source:** {data_source}")
-                    
-                except Exception as e:
-                    st.error(f"Error fetching data: {e}")
-    
-    # Run analysis button
-    if st.session_state.stock_data is not None:
-        st.divider()
-        
-        col1, col2, col3 = st.columns([2, 1, 1])
-        
-        with col1:
-            if st.button("🚀 Run Momentum & FIP Analysis", type="primary", use_container_width=True):
-                run_analysis(st.session_state.stock_data, month_labels)
-        
-        with col2:
-            stock_count = len(st.session_state.stock_data)
-            st.metric("Stocks to Analyze", stock_count)
-        
-        with col3:
-            if st.session_state.analysis_complete:
-                st.metric("Analysis Status", "✅ Complete")
-            else:
-                st.metric("Analysis Status", "⏳ Pending")
-
-with tab2:
-    st.header("📋 All Results")
-    
-    if st.session_state.analysis_complete and st.session_state.results_df is not None:
-        results_df = st.session_state.results_df
-        
-        # Summary metrics
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            avg_momentum = results_df['momentum_score'].mean()
-            st.metric("Avg Momentum Score", f"{avg_momentum:.3f}")
-        
-        with col2:
-            positive_momentum = (results_df['momentum_score'] > 0).sum()
-            st.metric("Positive Momentum", f"{positive_momentum}/{len(results_df)}")
-        
-        with col3:
-            avg_fip = results_df['fip_score'].mean()
-            st.metric("Avg FIP Score", f"{avg_fip:.3f}")
-        
-        # Results table
-        st.subheader("All Results (Sorted by Momentum Score)")
-        
-        # Define display columns
-        display_columns = ["Company Name", "Symbol", "ISIN Code"] + month_labels + ["momentum_score"]
-        display_columns_extended = display_columns + ["pct_negative_months", "pct_positive_months", "fip_score"]
-        
-        st.dataframe(
-            results_df[display_columns_extended],
-            use_container_width=True,
-            hide_index=True
-        )
-        
-        # Download option
-        if st.button("📥 Download Results as Excel"):
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                results_df.to_excel(writer, sheet_name='Analysis Results', index=False)
-            
-            st.download_button(
-                label="Download Excel File",
-                data=buffer.getvalue(),
-                file_name=f"stock_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-    else:
-        st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
-
-with tab3:
-    st.header("🎯 Top 25 Stable Stocks")
-    
-    if st.session_state.analysis_complete and st.session_state.results_df is not None:
-        results_df = st.session_state.results_df
-        
-        # Filter stocks with negative FIP scores
-        stable_stocks = results_df[results_df['fip_score'] < 0]
-        
-        if len(stable_stocks) > 0:
-            # Get top 25 by momentum score
-            top_25 = stable_stocks.head(25)
-            
-            # Summary metrics for top 25
-            col1, col2, col3 = st.columns(3)
-            
-            with col1:
-                st.metric("Stable Stocks Found", len(stable_stocks))
-            
-            with col2:
-                avg_momentum_top25 = top_25['momentum_score'].mean()
-                st.metric("Avg Momentum (Top 25)", f"{avg_momentum_top25:.3f}")
-            
-            with col3:
-                avg_fip_top25 = top_25['fip_score'].mean()
-                st.metric("Avg FIP (Top 25)", f"{avg_fip_top25:.3f}")
-            
-            st.success(f"Showing top 25 stocks with highest momentum from {len(stable_stocks)} stable stocks (negative FIP)")
-            
-            # Display top 25 results
-            display_columns = ["Company Name", "Symbol", "ISIN Code"] + month_labels + ["momentum_score"]
-            display_columns_extended = display_columns + ["pct_negative_months", "pct_positive_months", "fip_score"]
-            
-            st.dataframe(
-                top_25[display_columns_extended],
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Download option for top 25
-            if st.button("📥 Download Top 25 as Excel"):
-                buffer = io.BytesIO()
-                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                    top_25.to_excel(writer, sheet_name='Top 25 Stable Stocks', index=False)
-                
-                st.download_button(
-                    label="Download Top 25 Excel File",
-                    data=buffer.getvalue(),
-                    file_name=f"top_25_stable_stocks_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-        else:
-            st.warning("No stocks found with negative FIP scores.")
-    else:
-        st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
-
-with tab4:
-    st.header("🔔 Quarterly Rebalancing Alerts")
-    
-    # Check rebalancing status
-    if is_last_week_of_rebalancing_month():
-        st.success("📅 **REBALANCING WEEK**: Time to rebalance your portfolio!")
-        st.markdown("**🚨 This is the last week of a rebalancing month!**")
-    else:
-        next_rebalancing = get_next_rebalancing_info()
-        st.info(f"📅 **Next Rebalancing**: Last week of {next_rebalancing['month']} {next_rebalancing['year']} ({next_rebalancing['days_until']} days)")
-    
-    st.divider()
-    
-    # Telegram Bot Configuration
-    st.subheader("🤖 Telegram Bot Setup")
-    
-    # Instructions
-    with st.expander("📖 Setup Instructions"):
-        st.markdown("""
-        **Step 1: Create Bot**
-        1. Open Telegram and search for `@BotFather`
-        2. Send `/newbot` command
-        3. Choose name: "Your Investment Alert Bot"
-        4. Choose username: "your_investment_bot" (must end with 'bot')
-        5. Copy the token (looks like: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
-        
-        **Step 2: Get Your Chat ID**
-        1. Search for `@userinfobot` on Telegram
-        2. Send any message
-        3. Copy your Chat ID (looks like: `123456789`)
-        
-        **Step 3: Test**
-        1. Search for your bot by username
-        2. Send `/start` to activate
-        3. Configure bot in the app below
-        """)
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        telegram_token = st.text_input(
-            "🔑 Telegram Bot Token",
-            type="password",
-            placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
-            help="Get from @BotFather on Telegram"
-        )
-    
-    with col2:
-        chat_id = st.text_input(
-            "💬 Your Chat ID",
-            placeholder="123456789",
-            help="Get from @userinfobot on Telegram"
-        )
-    
-    # Test and Save configuration
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if st.button("🧪 Test Connection", type="secondary"):
-            if telegram_token and chat_id:
-                if test_telegram_connection(telegram_token, chat_id):
-                    st.session_state.telegram_config = {
-                        'token': telegram_token,
-                        'chat_id': chat_id
-                    }
-            else:
-                st.error("Please provide both token and chat ID")
-    
-    with col2:
-        if st.button("💾 Save Configuration", type="primary"):
-            if telegram_token and chat_id:
-                st.session_state.telegram_config = {
-                    'token': telegram_token,
-                    'chat_id': chat_id
-                }
-                st.success("✅ Configuration saved!")
-            else:
-                st.error("Please provide both token and chat ID")
-    
-    st.divider()
-    
-    # Alert System
-    st.subheader("📱 Send Rebalancing Alert")
-    
-    if st.session_state.analysis_complete and st.session_state.results_df is not None:
-        results_df = st.session_state.results_df
-        stable_stocks = results_df[results_df['fip_score'] < 0]
-        
-        if len(stable_stocks) > 0:
-            top_25 = stable_stocks.head(25)
-            
-            # Show alert preview
-            st.subheader("📋 Alert Preview")
-            preview_msg = create_rebalancing_alert_message(top_25)
-            st.code(preview_msg, language='text')
-            
-            # Send alert button
-            col1, col2 = st.columns([1, 3])
-            
-            with col1:
-                if st.button("📤 Send Alert", type="primary"):
-                    if st.session_state.telegram_config:
-                        send_telegram_alert(
-                            st.session_state.telegram_config['token'],
-                            st.session_state.telegram_config['chat_id'],
-                            preview_msg
-                        )
-                    else:
-                        st.error("Please configure Telegram bot first")
-            
-            with col2:
-                if st.session_state.telegram_config:
-                    st.success("✅ Telegram bot configured and ready")
-                else:
-                    st.warning("⚠️ Please configure Telegram bot first")
-        else:
-            st.warning("No stable stocks found. Please run analysis first.")
-    else:
-        st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
-    
-    st.divider()
-    
-    # Rebalancing Schedule
-    st.subheader("📅 Rebalancing Schedule")
-    
-    current_year = datetime.now().year
-    rebalancing_months = [2, 5, 8, 11]  # Feb, May, Aug, Nov
-    
-    schedule_data = []
-    for month in rebalancing_months:
-        if month < datetime.now().month:
-            year = current_year + 1
-        else:
-            year = current_year
-        
-        month_name = calendar.month_name[month]
-        last_day = calendar.monthrange(year, month)[1]
-        alert_start = datetime(year, month, last_day - 6)
-        alert_end = datetime(year, month, last_day)
-        
-        schedule_data.append({
-            'Month': f"{month_name} {year}",
-            'Alert Period': f"{alert_start.strftime('%b %d')} - {alert_end.strftime('%b %d')}",
-            'Status': '🔴 Active' if is_last_week_of_rebalancing_month() and month == datetime.now().month else '⏳ Pending'
-        })
-    
-    st.dataframe(schedule_data, use_container_width=True, hide_index=True)
-
-with tab5:
-    st.header("📈 Strategy Backtesting & Portfolio Evolution")
-    st.markdown("**Test your momentum strategy against historical data with complete portfolio tracking**")
-    
-    # Backtest Configuration
-    st.subheader("⚙️ Backtest Configuration")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        start_date = st.date_input(
-            "Start Date",
-            value=datetime(2021, 1, 1),
-            min_value=datetime(2018, 1, 1),
-            max_value=datetime.now()
-        )
-    
-    with col2:
-        initial_capital = st.number_input(
-            "Initial Capital (₹)",
-            min_value=100000,
-            max_value=10000000,
-            value=1000000,
-            step=100000,
-            format="%d"
-        )
-    
-    with col3:
-        fresh_capital_pct = st.number_input(
-            "Fresh Capital Every 6M (%)",
-            min_value=0,
-            max_value=50,
-            value=10,
-            step=5
-        )
-    
-    st.info("📝 **Note**: Transaction costs are not included in this backtest analysis")
-    
-    # Initialize backtest session state
-    if 'backtest_results' not in st.session_state:
-        st.session_state.backtest_results = None
-    if 'portfolio_evolution' not in st.session_state:
-        st.session_state.portfolio_evolution = None
-    
-    # Run Backtest Button
-    col1, col2 = st.columns([2, 1])
-    
-    with col1:
-        if st.button("🚀 Run Historical Backtest", type="primary", use_container_width=True):
-            run_comprehensive_backtest(start_date, initial_capital, fresh_capital_pct)
-    
-    with col2:
-        if st.session_state.backtest_results is not None:
-            st.metric("Backtest Status", "✅ Complete")
-        else:
-            st.metric("Backtest Status", "⏳ Pending")
-    
-    # Display Results
-    if st.session_state.backtest_results is not None:
-        display_backtest_results()
-
 def get_rebalancing_dates(start_date, end_date):
     """Get all rebalancing dates (Feb, May, Aug, Nov) between start and end dates"""
     rebalancing_months = [2, 5, 8, 11]  # Feb, May, Aug, Nov
@@ -1240,7 +837,406 @@ def display_stock_performance():
         for _, stock in bottom_performers.iterrows():
             st.write(f"**{stock['Symbol']}**: {stock['Portfolio_Contribution']:.2f}% contribution ({stock['Quarters_Held']} quarters)")
 
-# Add plotly to requirements.txt:
-# plotly>=5.0.0
 
+# Create main tab structure
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Fetch Data", "📋 All Results", "🎯 Top 25 Stable Stocks", "🔔 Alerts", "📈 Backtest"])
 
+with tab1:
+    st.header("📊 Fetch Stock Data")
+    
+    # Data source selection
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        data_source = st.selectbox(
+            "Select Data Source",
+            ["NIFTY 100 + NIFTY MIDCAP 150 (Combined)", "NIFTY 100 Only", "NIFTY MIDCAP 150 Only", "Upload CSV File"],
+            index=0
+        )
+    
+    with col2:
+        st.info(f"""
+        **Analysis Settings:**
+        - Period: {month_labels[0]} to {month_labels[-1]}
+        - Rolling Window: 11 months
+        - Auto-updates monthly
+        """)
+    
+    # Data fetching based on selection
+    if data_source == "Upload CSV File":
+        uploaded_file = st.file_uploader(
+            "Upload CSV file with stock symbols",
+            type=['csv'],
+            help="CSV should contain columns: 'Symbol', 'Company Name', 'ISIN Code'"
+        )
+        
+        if uploaded_file is not None:
+            try:
+                df = pd.read_csv(uploaded_file)
+                if validate_csv(df):
+                    st.session_state.stock_data = df
+                    st.success(f"✅ Loaded {len(df)} stocks from uploaded file")
+                    st.dataframe(df.head(10), use_container_width=True)
+            except Exception as e:
+                st.error(f"Error reading CSV file: {e}")
+    else:
+        # Fetch from predefined indices
+        if st.button("🔄 Fetch Current Index Data", type="primary"):
+            with st.spinner("Fetching latest stock data..."):
+                try:
+                    if data_source == "NIFTY 100 + NIFTY MIDCAP 150 (Combined)":
+                        stock_data = fetch_stock_data_cache("combined")
+                    elif data_source == "NIFTY 100 Only":
+                        stock_data = fetch_stock_data_cache("nifty100")
+                    elif data_source == "NIFTY MIDCAP 150 Only":
+                        stock_data = fetch_stock_data_cache("midcap150")
+                    
+                    st.session_state.stock_data = stock_data
+                    st.success(f"✅ Fetched {len(stock_data)} stocks from {data_source}")
+                    
+                    # Display sample data
+                    st.subheader("Sample Stock Data")
+                    st.dataframe(stock_data.head(10), use_container_width=True)
+                    
+                    # Show summary statistics
+                    st.subheader("Data Summary")
+                    st.write(f"**Total Stocks:** {len(stock_data)}")
+                    st.write(f"**Unique Companies:** {stock_data['Company Name'].nunique()}")
+                    st.write(f"**Data Source:** {data_source}")
+                    
+                except Exception as e:
+                    st.error(f"Error fetching data: {e}")
+    
+    # Run analysis button
+    if st.session_state.stock_data is not None:
+        st.divider()
+        
+        col1, col2, col3 = st.columns([2, 1, 1])
+        
+        with col1:
+            if st.button("🚀 Run Momentum & FIP Analysis", type="primary", use_container_width=True):
+                run_analysis(st.session_state.stock_data, month_labels)
+        
+        with col2:
+            stock_count = len(st.session_state.stock_data)
+            st.metric("Stocks to Analyze", stock_count)
+        
+        with col3:
+            if st.session_state.analysis_complete:
+                st.metric("Analysis Status", "✅ Complete")
+            else:
+                st.metric("Analysis Status", "⏳ Pending")
+
+with tab2:
+    st.header("📋 All Results")
+    
+    if st.session_state.analysis_complete and st.session_state.results_df is not None:
+        results_df = st.session_state.results_df
+        
+        # Summary metrics
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            avg_momentum = results_df['momentum_score'].mean()
+            st.metric("Avg Momentum Score", f"{avg_momentum:.3f}")
+        
+        with col2:
+            positive_momentum = (results_df['momentum_score'] > 0).sum()
+            st.metric("Positive Momentum", f"{positive_momentum}/{len(results_df)}")
+        
+        with col3:
+            avg_fip = results_df['fip_score'].mean()
+            st.metric("Avg FIP Score", f"{avg_fip:.3f}")
+        
+        # Results table
+        st.subheader("All Results (Sorted by Momentum Score)")
+        
+        # Define display columns
+        display_columns = ["Company Name", "Symbol", "ISIN Code"] + month_labels + ["momentum_score"]
+        display_columns_extended = display_columns + ["pct_negative_months", "pct_positive_months", "fip_score"]
+        
+        st.dataframe(
+            results_df[display_columns_extended],
+            use_container_width=True,
+            hide_index=True
+        )
+        
+        # Download option
+        if st.button("📥 Download Results as Excel"):
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                results_df.to_excel(writer, sheet_name='Analysis Results', index=False)
+            
+            st.download_button(
+                label="Download Excel File",
+                data=buffer.getvalue(),
+                file_name=f"stock_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+    else:
+        st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
+
+with tab3:
+    st.header("🎯 Top 25 Stable Stocks")
+    
+    if st.session_state.analysis_complete and st.session_state.results_df is not None:
+        results_df = st.session_state.results_df
+        
+        # Filter stocks with negative FIP scores
+        stable_stocks = results_df[results_df['fip_score'] < 0]
+        
+        if len(stable_stocks) > 0:
+            # Get top 25 by momentum score
+            top_25 = stable_stocks.head(25)
+            
+            # Summary metrics for top 25
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                st.metric("Stable Stocks Found", len(stable_stocks))
+            
+            with col2:
+                avg_momentum_top25 = top_25['momentum_score'].mean()
+                st.metric("Avg Momentum (Top 25)", f"{avg_momentum_top25:.3f}")
+            
+            with col3:
+                avg_fip_top25 = top_25['fip_score'].mean()
+                st.metric("Avg FIP (Top 25)", f"{avg_fip_top25:.3f}")
+            
+            st.success(f"Showing top 25 stocks with highest momentum from {len(stable_stocks)} stable stocks (negative FIP)")
+            
+            # Display top 25 results
+            display_columns = ["Company Name", "Symbol", "ISIN Code"] + month_labels + ["momentum_score"]
+            display_columns_extended = display_columns + ["pct_negative_months", "pct_positive_months", "fip_score"]
+            
+            st.dataframe(
+                top_25[display_columns_extended],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Download option for top 25
+            if st.button("📥 Download Top 25 as Excel"):
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    top_25.to_excel(writer, sheet_name='Top 25 Stable Stocks', index=False)
+                
+                st.download_button(
+                    label="Download Top 25 Excel File",
+                    data=buffer.getvalue(),
+                    file_name=f"top_25_stable_stocks_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        else:
+            st.warning("No stocks found with negative FIP scores.")
+    else:
+        st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
+
+with tab4:
+    st.header("🔔 Quarterly Rebalancing Alerts")
+    
+    # Check rebalancing status
+    if is_last_week_of_rebalancing_month():
+        st.success("📅 **REBALANCING WEEK**: Time to rebalance your portfolio!")
+        st.markdown("**🚨 This is the last week of a rebalancing month!**")
+    else:
+        next_rebalancing = get_next_rebalancing_info()
+        st.info(f"📅 **Next Rebalancing**: Last week of {next_rebalancing['month']} {next_rebalancing['year']} ({next_rebalancing['days_until']} days)")
+    
+    st.divider()
+    
+    # Telegram Bot Configuration
+    st.subheader("🤖 Telegram Bot Setup")
+    
+    # Instructions
+    with st.expander("📖 Setup Instructions"):
+        st.markdown("""
+        **Step 1: Create Bot**
+        1. Open Telegram and search for `@BotFather`
+        2. Send `/newbot` command
+        3. Choose name: "Your Investment Alert Bot"
+        4. Choose username: "your_investment_bot" (must end with 'bot')
+        5. Copy the token (looks like: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+        
+        **Step 2: Get Your Chat ID**
+        1. Search for `@userinfobot` on Telegram
+        2. Send any message
+        3. Copy your Chat ID (looks like: `123456789`)
+        
+        **Step 3: Test**
+        1. Search for your bot by username
+        2. Send `/start` to activate
+        3. Configure bot in the app below
+        """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        telegram_token = st.text_input(
+            "🔑 Telegram Bot Token",
+            type="password",
+            placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+            help="Get from @BotFather on Telegram"
+        )
+    
+    with col2:
+        chat_id = st.text_input(
+            "💬 Your Chat ID",
+            placeholder="123456789",
+            help="Get from @userinfobot on Telegram"
+        )
+    
+    # Test and Save configuration
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🧪 Test Connection", type="secondary"):
+            if telegram_token and chat_id:
+                if test_telegram_connection(telegram_token, chat_id):
+                    st.session_state.telegram_config = {
+                        'token': telegram_token,
+                        'chat_id': chat_id
+                    }
+            else:
+                st.error("Please provide both token and chat ID")
+    
+    with col2:
+        if st.button("💾 Save Configuration", type="primary"):
+            if telegram_token and chat_id:
+                st.session_state.telegram_config = {
+                    'token': telegram_token,
+                    'chat_id': chat_id
+                }
+                st.success("✅ Configuration saved!")
+            else:
+                st.error("Please provide both token and chat ID")
+    
+    st.divider()
+    
+    # Alert System
+    st.subheader("📱 Send Rebalancing Alert")
+    
+    if st.session_state.analysis_complete and st.session_state.results_df is not None:
+        results_df = st.session_state.results_df
+        stable_stocks = results_df[results_df['fip_score'] < 0]
+        
+        if len(stable_stocks) > 0:
+            top_25 = stable_stocks.head(25)
+            
+            # Show alert preview
+            st.subheader("📋 Alert Preview")
+            preview_msg = create_rebalancing_alert_message(top_25)
+            st.code(preview_msg, language='text')
+            
+            # Send alert button
+            col1, col2 = st.columns([1, 3])
+            
+            with col1:
+                if st.button("📤 Send Alert", type="primary"):
+                    if st.session_state.telegram_config:
+                        send_telegram_alert(
+                            st.session_state.telegram_config['token'],
+                            st.session_state.telegram_config['chat_id'],
+                            preview_msg
+                        )
+                    else:
+                        st.error("Please configure Telegram bot first")
+            
+            with col2:
+                if st.session_state.telegram_config:
+                    st.success("✅ Telegram bot configured and ready")
+                else:
+                    st.warning("⚠️ Please configure Telegram bot first")
+        else:
+            st.warning("No stable stocks found. Please run analysis first.")
+    else:
+        st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
+    
+    st.divider()
+    
+    # Rebalancing Schedule
+    st.subheader("📅 Rebalancing Schedule")
+    
+    current_year = datetime.now().year
+    rebalancing_months = [2, 5, 8, 11]  # Feb, May, Aug, Nov
+    
+    schedule_data = []
+    for month in rebalancing_months:
+        if month < datetime.now().month:
+            year = current_year + 1
+        else:
+            year = current_year
+        
+        month_name = calendar.month_name[month]
+        last_day = calendar.monthrange(year, month)[1]
+        alert_start = datetime(year, month, last_day - 6)
+        alert_end = datetime(year, month, last_day)
+        
+        schedule_data.append({
+            'Month': f"{month_name} {year}",
+            'Alert Period': f"{alert_start.strftime('%b %d')} - {alert_end.strftime('%b %d')}",
+            'Status': '🔴 Active' if is_last_week_of_rebalancing_month() and month == datetime.now().month else '⏳ Pending'
+        })
+    
+    st.dataframe(schedule_data, use_container_width=True, hide_index=True)
+
+with tab5:
+    st.header("📈 Strategy Backtesting & Portfolio Evolution")
+    st.markdown("**Test your momentum strategy against historical data with complete portfolio tracking**")
+    
+    # Backtest Configuration
+    st.subheader("⚙️ Backtest Configuration")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        start_date = st.date_input(
+            "Start Date",
+            value=datetime(2021, 1, 1),
+            min_value=datetime(2018, 1, 1),
+            max_value=datetime.now()
+        )
+    
+    with col2:
+        initial_capital = st.number_input(
+            "Initial Capital (₹)",
+            min_value=100000,
+            max_value=10000000,
+            value=1000000,
+            step=100000,
+            format="%d"
+        )
+    
+    with col3:
+        fresh_capital_pct = st.number_input(
+            "Fresh Capital Every 6M (%)",
+            min_value=0,
+            max_value=50,
+            value=10,
+            step=5
+        )
+    
+    st.info("📝 **Note**: Transaction costs are not included in this backtest analysis")
+    
+    # Initialize backtest session state
+    if 'backtest_results' not in st.session_state:
+        st.session_state.backtest_results = None
+    if 'portfolio_evolution' not in st.session_state:
+        st.session_state.portfolio_evolution = None
+    
+    # Run Backtest Button
+    col1, col2 = st.columns([2, 1])
+    
+    with col1:
+        if st.button("🚀 Run Historical Backtest", type="primary", use_container_width=True):
+            run_comprehensive_backtest(start_date, initial_capital, fresh_capital_pct)
+    
+    with col2:
+        if st.session_state.backtest_results is not None:
+            st.metric("Backtest Status", "✅ Complete")
+        else:
+            st.metric("Backtest Status", "⏳ Pending")
+    
+    # Display Results
+    if st.session_state.backtest_results is not None:
+        display_backtest_results()
