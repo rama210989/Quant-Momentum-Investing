@@ -7,6 +7,10 @@ import io
 import xlsxwriter
 from typing import Optional, Dict, Any, List
 from stock_data_fetcher import fetch_stock_data_cache
+import requests
+import json
+from datetime import datetime, timedelta
+import calendar
 
 # Page configuration for mobile compatibility
 st.set_page_config(
@@ -52,6 +56,8 @@ if 'results_df' not in st.session_state:
     st.session_state.results_df = None
 if 'stock_data' not in st.session_state:
     st.session_state.stock_data = None
+if 'telegram_config' not in st.session_state:
+    st.session_state.telegram_config = None
 
 # Fixed parameters (matching Colab exactly)
 today = datetime.datetime.today()
@@ -134,6 +140,131 @@ def calculate_fip(row, month_labels: List[str]) -> pd.Series:
         "fip_score": fip
     })
 
+def is_last_week_of_rebalancing_month():
+    """Check if current date is in the last week of rebalancing months (Feb, May, Aug, Nov)"""
+    current_date = datetime.now()
+    current_month = current_date.month
+    rebalancing_months = [2, 5, 8, 11]  # Feb, May, Aug, Nov
+    
+    if current_month not in rebalancing_months:
+        return False
+    
+    # Get last day of current month
+    last_day = calendar.monthrange(current_date.year, current_month)[1]
+    
+    # Check if we're in the last 7 days of the month
+    days_remaining = last_day - current_date.day
+    
+    return days_remaining <= 7
+
+def get_next_rebalancing_info():
+    """Get information about next rebalancing date"""
+    current_date = datetime.now()
+    current_month = current_date.month
+    rebalancing_months = [2, 5, 8, 11]  # Feb, May, Aug, Nov
+    
+    # Find next rebalancing month
+    next_months = [m for m in rebalancing_months if m > current_month]
+    if next_months:
+        next_month = next_months[0]
+        next_year = current_date.year
+    else:
+        next_month = rebalancing_months[0]
+        next_year = current_date.year + 1
+    
+    # Calculate last week of next rebalancing month
+    last_day = calendar.monthrange(next_year, next_month)[1]
+    last_week_start = datetime(next_year, next_month, last_day - 6)
+    
+    days_until = (last_week_start - current_date).days
+    
+    month_name = calendar.month_name[next_month]
+    
+    return {
+        'month': month_name,
+        'year': next_year,
+        'days_until': days_until,
+        'last_week_start': last_week_start
+    }
+
+def create_rebalancing_alert_message(top_25_stocks: pd.DataFrame):
+    """Create rebalancing alert message for Telegram"""
+    current_date = datetime.now().strftime('%B %d, %Y')
+    
+    message = f"🔔 <b>REBALANCING ALERT</b> - {current_date}\n\n"
+    message += "📅 <b>Last week of rebalancing month!</b>\n"
+    message += "⏰ <b>Time to rebalance your portfolio</b>\n\n"
+    
+    message += f"🎯 <b>TOP 25 STABLE MOMENTUM STOCKS</b>\n"
+    message += f"<i>Based on trailing 12M momentum, stable FIP scores</i>\n\n"
+    
+    # Add top 10 stocks with key metrics
+    message += "🏆 <b>TOP 10 PICKS:</b>\n"
+    message += "<pre>"
+    for i, (_, stock) in enumerate(top_25_stocks.head(10).iterrows()):
+        message += f"{i+1:2d}. {stock['Symbol']:<12} {stock['momentum_score']:6.1f}% (FIP: {stock['fip_score']:6.3f})\n"
+    message += "</pre>"
+    
+    if len(top_25_stocks) > 10:
+        message += f"\n... and {len(top_25_stocks) - 10} more stocks\n"
+    
+    # Add summary stats
+    avg_momentum = top_25_stocks['momentum_score'].mean()
+    avg_fip = top_25_stocks['fip_score'].mean()
+    equal_weight = 100 / len(top_25_stocks)
+    
+    message += f"\n📈 <b>PORTFOLIO METRICS:</b>\n"
+    message += f"• Avg Momentum: <b>{avg_momentum:.2f}%</b>\n"
+    message += f"• Avg FIP Score: <b>{avg_fip:.3f}</b>\n"
+    message += f"• Equal Weight: <b>{equal_weight:.1f}% per stock</b>\n"
+    
+    message += f"\n🚨 <b>ACTION REQUIRED:</b>\n"
+    message += f"• Review current holdings\n"
+    message += f"• Compare with new top 25 list\n"
+    message += f"• Prepare rebalancing orders\n"
+    message += f"• Execute by month-end\n"
+    
+    return message
+
+def send_telegram_alert(token: str, chat_id: str, message: str):
+    """Send alert via Telegram Bot"""
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    
+    payload = {
+        'chat_id': chat_id,
+        'text': message,
+        'parse_mode': 'HTML'
+    }
+    
+    try:
+        response = requests.post(url, json=payload, timeout=10)
+        if response.status_code == 200:
+            st.success("✅ Alert sent successfully!")
+            return True
+        else:
+            st.error(f"❌ Failed to send alert: {response.text}")
+            return False
+    except Exception as e:
+        st.error(f"❌ Error sending alert: {str(e)}")
+        return False
+
+def test_telegram_connection(token: str, chat_id: str):
+    """Test Telegram bot connection"""
+    url = f"https://api.telegram.org/bot{token}/getMe"
+    
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            bot_info = response.json()
+            st.success(f"✅ Bot connected: @{bot_info['result']['username']}")
+            return True
+        else:
+            st.error(f"❌ Connection failed: {response.text}")
+            return False
+    except Exception as e:
+        st.error(f"❌ Connection error: {str(e)}")
+        return False
+
 # Analysis function - Define before usage
 def run_analysis(stock_data: pd.DataFrame, month_labels: List[str]):
     """Run the momentum and FIP analysis"""
@@ -178,8 +309,28 @@ def run_analysis(stock_data: pd.DataFrame, month_labels: List[str]):
         else:
             st.error("No valid results found. Please check your data and try again.")
 
+# Sidebar - Rebalancing Status
+st.sidebar.title("🔄 Rebalancing Status")
+
+if is_last_week_of_rebalancing_month():
+    st.sidebar.error("🚨 REBALANCING WEEK!")
+    st.sidebar.markdown("**Time to rebalance your portfolio**")
+    
+    current_date = datetime.now()
+    month_name = calendar.month_name[current_date.month]
+    last_day = calendar.monthrange(current_date.year, current_date.month)[1]
+    days_left = last_day - current_date.day
+    
+    st.sidebar.write(f"📅 **{month_name} {current_date.year}**")
+    st.sidebar.write(f"⏰ **{days_left} days left**")
+else:
+    next_rebalancing = get_next_rebalancing_info()
+    st.sidebar.info(f"📅 Next rebalancing:")
+    st.sidebar.write(f"**{next_rebalancing['month']} {next_rebalancing['year']}**")
+    st.sidebar.write(f"⏰ **{next_rebalancing['days_until']} days to go**")
+
 # Create main tab structure
-tab1, tab2, tab3 = st.tabs(["📊 Fetch Data", "📋 All Results", "🎯 Top 25 Stable Stocks"])
+tab1, tab2, tab3, tab4 = st.tabs(["📊 Fetch Data", "📋 All Results", "🎯 Top 25 Stable Stocks", "🔔 Alerts"])
 
 with tab1:
     st.header("📊 Fetch Stock Data")
@@ -372,4 +523,150 @@ with tab3:
     else:
         st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
 
-
+with tab4:
+    st.header("🔔 Quarterly Rebalancing Alerts")
+    
+    # Check rebalancing status
+    if is_last_week_of_rebalancing_month():
+        st.success("📅 **REBALANCING WEEK**: Time to rebalance your portfolio!")
+        st.markdown("**🚨 This is the last week of a rebalancing month!**")
+    else:
+        next_rebalancing = get_next_rebalancing_info()
+        st.info(f"📅 **Next Rebalancing**: Last week of {next_rebalancing['month']} {next_rebalancing['year']} ({next_rebalancing['days_until']} days)")
+    
+    st.divider()
+    
+    # Telegram Bot Configuration
+    st.subheader("🤖 Telegram Bot Setup")
+    
+    # Instructions
+    with st.expander("📖 Setup Instructions"):
+        st.markdown("""
+        **Step 1: Create Bot**
+        1. Open Telegram and search for `@BotFather`
+        2. Send `/newbot` command
+        3. Choose name: "Your Investment Alert Bot"
+        4. Choose username: "your_investment_bot" (must end with 'bot')
+        5. Copy the token (looks like: `123456789:ABCdefGHIjklMNOpqrsTUVwxyz`)
+        
+        **Step 2: Get Your Chat ID**
+        1. Search for `@userinfobot` on Telegram
+        2. Send any message
+        3. Copy your Chat ID (looks like: `123456789`)
+        
+        **Step 3: Test**
+        1. Search for your bot by username
+        2. Send `/start` to activate
+        3. Configure bot in the app below
+        """)
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        telegram_token = st.text_input(
+            "🔑 Telegram Bot Token",
+            type="password",
+            placeholder="123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
+            help="Get from @BotFather on Telegram"
+        )
+    
+    with col2:
+        chat_id = st.text_input(
+            "💬 Your Chat ID",
+            placeholder="123456789",
+            help="Get from @userinfobot on Telegram"
+        )
+    
+    # Test and Save configuration
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("🧪 Test Connection", type="secondary"):
+            if telegram_token and chat_id:
+                if test_telegram_connection(telegram_token, chat_id):
+                    st.session_state.telegram_config = {
+                        'token': telegram_token,
+                        'chat_id': chat_id
+                    }
+            else:
+                st.error("Please provide both token and chat ID")
+    
+    with col2:
+        if st.button("💾 Save Configuration", type="primary"):
+            if telegram_token and chat_id:
+                st.session_state.telegram_config = {
+                    'token': telegram_token,
+                    'chat_id': chat_id
+                }
+                st.success("✅ Configuration saved!")
+            else:
+                st.error("Please provide both token and chat ID")
+    
+    st.divider()
+    
+    # Alert System
+    st.subheader("📱 Send Rebalancing Alert")
+    
+    if st.session_state.analysis_complete and st.session_state.results_df is not None:
+        results_df = st.session_state.results_df
+        stable_stocks = results_df[results_df['fip_score'] < 0]
+        
+        if len(stable_stocks) > 0:
+            top_25 = stable_stocks.head(25)
+            
+            # Show alert preview
+            st.subheader("📋 Alert Preview")
+            preview_msg = create_rebalancing_alert_message(top_25)
+            st.code(preview_msg, language='text')
+            
+            # Send alert button
+            col1, col2 = st.columns([1, 3])
+            
+            with col1:
+                if st.button("📤 Send Alert", type="primary"):
+                    if st.session_state.telegram_config:
+                        send_telegram_alert(
+                            st.session_state.telegram_config['token'],
+                            st.session_state.telegram_config['chat_id'],
+                            preview_msg
+                        )
+                    else:
+                        st.error("Please configure Telegram bot first")
+            
+            with col2:
+                if st.session_state.telegram_config:
+                    st.success("✅ Telegram bot configured and ready")
+                else:
+                    st.warning("⚠️ Please configure Telegram bot first")
+        else:
+            st.warning("No stable stocks found. Please run analysis first.")
+    else:
+        st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
+    
+    st.divider()
+    
+    # Rebalancing Schedule
+    st.subheader("📅 Rebalancing Schedule")
+    
+    current_year = datetime.now().year
+    rebalancing_months = [2, 5, 8, 11]  # Feb, May, Aug, Nov
+    
+    schedule_data = []
+    for month in rebalancing_months:
+        if month < datetime.now().month:
+            year = current_year + 1
+        else:
+            year = current_year
+        
+        month_name = calendar.month_name[month]
+        last_day = calendar.monthrange(year, month)[1]
+        alert_start = datetime(year, month, last_day - 6)
+        alert_end = datetime(year, month, last_day)
+        
+        schedule_data.append({
+            'Month': f"{month_name} {year}",
+            'Alert Period': f"{alert_start.strftime('%b %d')} - {alert_end.strftime('%b %d')}",
+            'Status': '🔴 Active' if is_last_week_of_rebalancing_month() and month == datetime.now().month else '⏳ Pending'
+        })
+    
+    st.dataframe(schedule_data, use_container_width=True, hide_index=True)
