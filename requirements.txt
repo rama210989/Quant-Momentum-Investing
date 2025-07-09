@@ -1,6 +1,8 @@
-
-streamlit==1.28.1
-yfinance==0.2.18
-pandas==2.0.3
-numpy==1.24.3
-plotly==5.17.0
+streamlit
+pandas
+yfinance
+numpy
+rich==13.7.1
+pygments==2.18.0
+markdown-it-py==2.2.0
+mdurl==0.1.0
