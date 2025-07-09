@@ -2,7 +2,4 @@ streamlit
 pandas
 yfinance
 numpy
-rich==13.7.1
-pygments==2.18.0
-markdown-it-py==2.2.0
-mdurl==0.1.0
+xlsxwriter
