@@ -1,7 +1,7 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import datetime
+from datetime import datetime, timedelta
 import numpy as np
 import io
 import xlsxwriter
@@ -9,9 +9,7 @@ from typing import Optional, Dict, Any, List
 from stock_data_fetcher import fetch_stock_data_cache
 import requests
 import json
-from datetime import datetime, timedelta
 import calendar
-
 
 # Page configuration for mobile compatibility
 st.set_page_config(
@@ -84,8 +82,8 @@ def validate_csv(df: pd.DataFrame) -> bool:
     
     return True
 
-def calculate_momentum(symbol: str, start_date: datetime.datetime, 
-                     end_date: datetime.datetime, month_labels: List[str]) -> Optional[Dict[str, Any]]:
+def calculate_momentum(symbol: str, start_date: datetime, 
+                     end_date: datetime, month_labels: List[str]) -> Optional[Dict[str, Any]]:
     """Calculate momentum score exactly like Colab"""
     try:
         data = yf.download(f"{symbol}.NS", start=start_date, end=end_date, 
@@ -462,7 +460,7 @@ with tab2:
             st.download_button(
                 label="Download Excel File",
                 data=buffer.getvalue(),
-                file_name=f"stock_analysis_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                file_name=f"stock_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
     else:
@@ -516,7 +514,7 @@ with tab3:
                 st.download_button(
                     label="Download Top 25 Excel File",
                     data=buffer.getvalue(),
-                    file_name=f"top_25_stable_stocks_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    file_name=f"top_25_stable_stocks_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
