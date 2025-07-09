@@ -12,6 +12,7 @@ import json
 from datetime import datetime, timedelta
 import calendar
 
+
 # Page configuration for mobile compatibility
 st.set_page_config(
     page_title="Stock Momentum & FIP Analysis",
@@ -60,8 +61,8 @@ if 'telegram_config' not in st.session_state:
     st.session_state.telegram_config = None
 
 # Fixed parameters (matching Colab exactly)
-today = datetime.datetime.today()
-end_date = datetime.datetime(today.year, today.month, 1) + pd.DateOffset(months=1)
+today = datetime.today()
+end_date = datetime(today.year, today.month, 1) + pd.DateOffset(months=1)
 start_date = end_date - pd.DateOffset(months=13)
 
 # Month labels: exactly like Colab
