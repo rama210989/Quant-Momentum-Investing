@@ -13,14 +13,23 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# Try to import Supabase stock fetcher, fallback to CSV only
+# Import stock data fetcher with error handling
 try:
-    from stock_data_fetcher import fetch_stock_data_cache
-    DATABASE_AVAILABLE = True
-except ImportError:
+    from stock_data_fetcher import (
+        DATABASE_AVAILABLE, 
+        fetcher, 
+        fetch_stock_data_cache, 
+        validate_csv, 
+        show_database_status,
+        clear_cache
+    )
+    FETCHER_IMPORTED = True
+except ImportError as e:
+    st.error(f"❌ Error importing stock_data_fetcher: {e}")
     DATABASE_AVAILABLE = False
+    FETCHER_IMPORTED = False
 
-# Page configuration for mobile compatibility
+# Page configuration
 st.set_page_config(
     page_title="Stock Momentum & FIP Analysis",
     page_icon="📈",
@@ -76,17 +85,29 @@ start_date = end_date - pd.DateOffset(months=13)
 month_range = pd.date_range(start=start_date, periods=11, freq='MS')
 month_labels = [d.strftime('%b %Y') for d in month_range]
 
-def validate_csv(df: pd.DataFrame) -> bool:
+def validate_csv_upload(df: pd.DataFrame) -> bool:
     """Validate uploaded CSV file format"""
     required_columns = ['Symbol', 'Company Name', 'ISIN Code']
     missing_columns = [col for col in required_columns if col not in df.columns]
     
     if missing_columns:
-        st.error(f"Missing required columns: {missing_columns}")
+        st.error(f"❌ Missing required columns: {missing_columns}")
+        st.info("📋 **Required columns:** Symbol, Company Name, ISIN Code")
         return False
     
     if df.empty:
-        st.error("CSV file is empty")
+        st.error("❌ CSV file is empty")
+        return False
+    
+    # Check for empty symbols
+    empty_symbols = df['Symbol'].isna().sum() + (df['Symbol'] == '').sum()
+    if empty_symbols > 0:
+        st.warning(f"⚠️ Found {empty_symbols} rows with empty symbols - these will be filtered out")
+        # Remove empty symbols
+        df = df[df['Symbol'].notna() & (df['Symbol'] != '')]
+    
+    if len(df) == 0:
+        st.error("❌ No valid stocks found after filtering")
         return False
     
     return True
@@ -320,98 +341,102 @@ else:
     st.sidebar.write(f"**{next_rebalancing['month']} {next_rebalancing['year']}**")
     st.sidebar.write(f"⏰ **{next_rebalancing['days_until']} days to go**")
 
+# Database status in sidebar
+st.sidebar.divider()
+if FETCHER_IMPORTED:
+    show_database_status()
+else:
+    st.sidebar.error("❌ Database module not loaded")
+
 # Create main tab structure
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Fetch Data", "📋 All Results", "🎯 Top 25 Stable Stocks", "🔔 Alerts"])
 
 with tab1:
     st.header("📊 Fetch Stock Data")
     
-    # Try database first, then fallback to CSV
-    if DATABASE_AVAILABLE:
-        # Test database connection
-        try:
-            test_data = fetch_stock_data_cache("combined")
-            database_works = len(test_data) > 0
-        except:
-            database_works = False
+    # Show data source options based on database availability
+    if DATABASE_AVAILABLE and FETCHER_IMPORTED:
+        st.success("✅ Database connection available")
         
-        if database_works:
-            st.success(f"✅ Database connected: {len(test_data)} stocks available")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            data_source = st.selectbox(
+                "Select Data Source",
+                ["Database: NIFTY 100 + MIDCAP 150", "Database: NIFTY 100 Only", "Database: MIDCAP 150 Only", "Upload CSV File"],
+                index=0
+            )
+        
+        with col2:
+            st.info(f"""
+            **Analysis Settings:**
+            - Period: {month_labels[0]} to {month_labels[-1]}
+            - Rolling Window: 11 months
+            - Data Source: {'Database' if 'Database' in data_source else 'CSV Upload'}
+            """)
+        
+        # Handle data source selection
+        if data_source == "Upload CSV File":
+            st.subheader("📁 Upload CSV File")
+            uploaded_file = st.file_uploader(
+                "Choose CSV file",
+                type=['csv'],
+                help="CSV should contain columns: 'Symbol', 'Company Name', 'ISIN Code'"
+            )
             
-            # Data source selection
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                data_source = st.selectbox(
-                    "Select Data Source",
-                    ["NIFTY 100 + NIFTY MIDCAP 150 (Combined)", "NIFTY 100 Only", "NIFTY MIDCAP 150 Only", "Upload CSV File"],
-                    index=0
-                )
-            
-            with col2:
-                st.info(f"""
-                **Analysis Settings:**
-                - Period: {month_labels[0]} to {month_labels[-1]}
-                - Rolling Window: 11 months
-                - Data Source: Database
-                """)
-            
-            # Fetch from database or upload CSV
-            if data_source == "Upload CSV File":
-                uploaded_file = st.file_uploader(
-                    "Upload CSV file with stock symbols",
-                    type=['csv'],
-                    help="CSV should contain columns: 'Symbol', 'Company Name', 'ISIN Code'"
-                )
-                
-                if uploaded_file is not None:
-                    try:
-                        df = pd.read_csv(uploaded_file)
-                        if validate_csv(df):
-                            st.session_state.stock_data = df
-                            st.success(f"✅ Loaded {len(df)} stocks from uploaded file")
-                            st.dataframe(df.head(10), use_container_width=True)
-                    except Exception as e:
-                        st.error(f"Error reading CSV file: {e}")
-            else:
-                # Fetch from database
-                if st.button("🔄 Fetch Current Index Data", type="primary"):
-                    try:
-                        with st.spinner("Fetching data from database..."):
-                            if data_source == "NIFTY 100 + NIFTY MIDCAP 150 (Combined)":
-                                stock_data = fetch_stock_data_cache("combined")
-                            elif data_source == "NIFTY 100 Only":
-                                stock_data = fetch_stock_data_cache("nifty100")
-                            elif data_source == "NIFTY MIDCAP 150 Only":
-                                stock_data = fetch_stock_data_cache("midcap150")
-                            
-                            st.session_state.stock_data = stock_data
-                            st.success(f"✅ Fetched {len(stock_data)} stocks from database")
-                            
-                            st.subheader("Sample Stock Data")
-                            st.dataframe(stock_data.head(10), use_container_width=True)
-                            
-                            st.subheader("Data Summary")
-                            st.write(f"**Total Stocks:** {len(stock_data)}")
-                            st.write(f"**Unique Companies:** {stock_data['Company Name'].nunique()}")
-                            st.write(f"**Data Source:** Database")
-                            
-                    except Exception as e:
-                        st.error(f"❌ Error fetching data from database: {e}")
+            if uploaded_file is not None:
+                try:
+                    df = pd.read_csv(uploaded_file)
+                    if validate_csv_upload(df):
+                        # Clean data
+                        df['Symbol'] = df['Symbol'].str.replace('.NS', '', regex=False)
+                        df = df[df['Symbol'].str.len() > 0]  # Remove empty symbols
+                        
+                        st.session_state.stock_data = df
+                        st.success(f"✅ Loaded {len(df)} stocks from uploaded file")
+                        st.dataframe(df.head(10), use_container_width=True)
+                except Exception as e:
+                    st.error(f"❌ Error reading CSV file: {e}")
         
         else:
-            st.warning("⚠️ Database not populated. Please upload CSV files.")
-            database_works = False
+            # Fetch from database
+            if st.button("🔄 Fetch Data from Database", type="primary"):
+                try:
+                    with st.spinner("Fetching data from database..."):
+                        if data_source == "Database: NIFTY 100 + MIDCAP 150":
+                            stock_data = fetch_stock_data_cache("combined")
+                        elif data_source == "Database: NIFTY 100 Only":
+                            stock_data = fetch_stock_data_cache("nifty100")
+                        elif data_source == "Database: MIDCAP 150 Only":
+                            stock_data = fetch_stock_data_cache("midcap150")
+                        
+                        st.session_state.stock_data = stock_data
+                        st.success(f"✅ Fetched {len(stock_data)} stocks from database")
+                        
+                        st.subheader("📋 Sample Stock Data")
+                        st.dataframe(stock_data.head(10), use_container_width=True)
+                        
+                        st.subheader("📊 Data Summary")
+                        st.write(f"**Total Stocks:** {len(stock_data)}")
+                        st.write(f"**Unique Companies:** {stock_data['Company Name'].nunique()}")
+                        st.write(f"**Data Source:** Database")
+                        
+                except Exception as e:
+                    st.error(f"❌ Error fetching data from database: {e}")
+                    st.info("💡 Please try uploading a CSV file instead")
     
-    # If database doesn't work, show CSV upload only
-    if not DATABASE_AVAILABLE or not database_works:
-        if not DATABASE_AVAILABLE:
-            st.warning("⚠️ Database connection not available. Using CSV upload.")
+    else:
+        # Database not available - CSV upload only
+        if FETCHER_IMPORTED:
+            st.warning("⚠️ Database connection not available. Please upload CSV files.")
+        else:
+            st.warning("⚠️ Database module not loaded. Please upload CSV files.")
         
-        st.info("📁 **Please upload your stock data CSV files**")
+        st.subheader("📁 Upload CSV File")
+        st.info("📋 **Required columns:** Symbol, Company Name, ISIN Code")
         
         uploaded_file = st.file_uploader(
-            "Upload CSV file with stock symbols",
+            "Choose CSV file with stock data",
             type=['csv'],
             help="CSV should contain columns: 'Symbol', 'Company Name', 'ISIN Code'"
         )
@@ -419,14 +444,26 @@ with tab1:
         if uploaded_file is not None:
             try:
                 df = pd.read_csv(uploaded_file)
-                if validate_csv(df):
+                if validate_csv_upload(df):
+                    # Clean data
+                    df['Symbol'] = df['Symbol'].str.replace('.NS', '', regex=False)
+                    df = df[df['Symbol'].str.len() > 0]  # Remove empty symbols
+                    
                     st.session_state.stock_data = df
                     st.success(f"✅ Loaded {len(df)} stocks from uploaded file")
+                    
+                    st.subheader("📋 Sample Stock Data")
                     st.dataframe(df.head(10), use_container_width=True)
+                    
+                    st.subheader("📊 Data Summary")
+                    st.write(f"**Total Stocks:** {len(df)}")
+                    st.write(f"**Unique Companies:** {df['Company Name'].nunique()}")
+                    st.write(f"**Data Source:** CSV Upload")
+                    
             except Exception as e:
-                st.error(f"Error reading CSV file: {e}")
+                st.error(f"❌ Error reading CSV file: {e}")
     
-    # Run analysis button
+    # Run analysis section
     if st.session_state.stock_data is not None:
         st.divider()
         
@@ -445,6 +482,9 @@ with tab1:
                 st.metric("Analysis Status", "✅ Complete")
             else:
                 st.metric("Analysis Status", "⏳ Pending")
+    
+    else:
+        st.info("👆 Please fetch data from database or upload a CSV file to continue")
 
 with tab2:
     st.header("📋 All Results")
@@ -457,7 +497,7 @@ with tab2:
         
         with col1:
             avg_momentum = results_df['momentum_score'].mean()
-            st.metric("Avg Momentum Score", f"{avg_momentum:.3f}")
+            st.metric("Avg Momentum Score", f"{avg_momentum:.2f}%")
         
         with col2:
             positive_momentum = (results_df['momentum_score'] > 0).sum()
@@ -468,29 +508,48 @@ with tab2:
             st.metric("Avg FIP Score", f"{avg_fip:.3f}")
         
         # Results table
-        st.subheader("All Results (Sorted by Momentum Score)")
+        st.subheader("📊 All Results (Sorted by Momentum Score)")
         
         display_columns = ["Company Name", "Symbol", "ISIN Code"] + month_labels + ["momentum_score"]
         display_columns_extended = display_columns + ["pct_negative_months", "pct_positive_months", "fip_score"]
         
+        # Format numbers for better display
+        formatted_df = results_df[display_columns_extended].copy()
+        
+        # Format percentage columns
+        for col in month_labels + ["momentum_score", "pct_negative_months", "pct_positive_months"]:
+            if col in formatted_df.columns:
+                formatted_df[col] = formatted_df[col].round(2)
+        
+        # Format FIP score
+        if "fip_score" in formatted_df.columns:
+            formatted_df["fip_score"] = formatted_df["fip_score"].round(3)
+        
         st.dataframe(
-            results_df[display_columns_extended],
+            formatted_df,
             use_container_width=True,
             hide_index=True
         )
         
         # Download option
-        if st.button("📥 Download Results as Excel"):
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
-                results_df.to_excel(writer, sheet_name='Analysis Results', index=False)
-            
-            st.download_button(
-                label="Download Excel File",
-                data=buffer.getvalue(),
-                file_name=f"stock_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📥 Download Results as Excel"):
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='xlsxwriter') as writer:
+                    results_df.to_excel(writer, sheet_name='Analysis Results', index=False)
+                
+                st.download_button(
+                    label="Download Excel File",
+                    data=buffer.getvalue(),
+                    file_name=f"stock_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+        
+        with col2:
+            if FETCHER_IMPORTED and st.button("🔄 Clear Cache"):
+                clear_cache()
     else:
         st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
 
@@ -500,7 +559,7 @@ with tab3:
     if st.session_state.analysis_complete and st.session_state.results_df is not None:
         results_df = st.session_state.results_df
         
-        # Filter stocks with negative FIP scores
+        # Filter stocks with negative FIP scores (stable stocks)
         stable_stocks = results_df[results_df['fip_score'] < 0]
         
         if len(stable_stocks) > 0:
@@ -515,20 +574,32 @@ with tab3:
             
             with col2:
                 avg_momentum_top25 = top_25['momentum_score'].mean()
-                st.metric("Avg Momentum (Top 25)", f"{avg_momentum_top25:.3f}")
+                st.metric("Avg Momentum (Top 25)", f"{avg_momentum_top25:.2f}%")
             
             with col3:
                 avg_fip_top25 = top_25['fip_score'].mean()
                 st.metric("Avg FIP (Top 25)", f"{avg_fip_top25:.3f}")
             
-            st.success(f"Showing top 25 stocks with highest momentum from {len(stable_stocks)} stable stocks (negative FIP)")
+            st.success(f"✅ Showing top 25 stocks with highest momentum from {len(stable_stocks)} stable stocks (negative FIP)")
             
             # Display top 25 results
             display_columns = ["Company Name", "Symbol", "ISIN Code"] + month_labels + ["momentum_score"]
             display_columns_extended = display_columns + ["pct_negative_months", "pct_positive_months", "fip_score"]
             
+            # Format numbers for better display
+            formatted_top25 = top_25[display_columns_extended].copy()
+            
+            # Format percentage columns
+            for col in month_labels + ["momentum_score", "pct_negative_months", "pct_positive_months"]:
+                if col in formatted_top25.columns:
+                    formatted_top25[col] = formatted_top25[col].round(2)
+            
+            # Format FIP score
+            if "fip_score" in formatted_top25.columns:
+                formatted_top25["fip_score"] = formatted_top25["fip_score"].round(3)
+            
             st.dataframe(
-                top_25[display_columns_extended],
+                formatted_top25,
                 use_container_width=True,
                 hide_index=True
             )
@@ -546,7 +617,8 @@ with tab3:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
         else:
-            st.warning("No stocks found with negative FIP scores.")
+            st.warning("⚠️ No stocks found with negative FIP scores (stable stocks).")
+            st.info("💡 Stable stocks are those with FIP scores < 0, indicating consistent momentum patterns.")
     else:
         st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
 
@@ -666,7 +738,7 @@ with tab4:
                 else:
                     st.warning("⚠️ Please configure Telegram bot first")
         else:
-            st.warning("No stable stocks found. Please run analysis first.")
+            st.warning("⚠️ No stable stocks found. Please run analysis first.")
     else:
         st.info("👆 Please fetch data and run analysis first in the 'Fetch Data' tab.")
     
@@ -697,3 +769,12 @@ with tab4:
         })
     
     st.dataframe(schedule_data, use_container_width=True, hide_index=True)
+
+# Footer
+st.divider()
+st.markdown("**📈 Stock Momentum & FIP Analysis App** | Built with Streamlit")
+
+if DATABASE_AVAILABLE:
+    st.markdown("🟢 **Database Status:** Connected")
+else:
+    st.markdown("🟡 **Database Status:** CSV Upload Mode")
