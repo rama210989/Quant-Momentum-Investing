@@ -1,426 +1,346 @@
-import requests
+"""
+Supabase-Powered Stock Data Fetcher
+===================================
+Replaces the original stock_data_fetcher.py to read from Supabase database
+instead of hardcoded lists or unreliable web scraping.
+"""
+
 import pandas as pd
 from typing import List, Dict, Any
 import streamlit as st
+from supabase import create_client, Client
+import logging
+from datetime import datetime, timedelta
+import os
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Supabase configuration - UPDATE THESE
+SUPABASE_URL = "https://koujyyumgqlththajmui.supabase.co"  # Your existing URL
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtvdWp5eXVtZ3FsdGh0aGFqbXVpIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc1MjEyMTY4OSwiZXhwIjoyMDY3Njk3Njg5fQ.q6nhzZUdc3SxM5Wezd1D7rkTXB8Ur48PP-AvZm8Erp0"  # Your existing key
+
+class SupabaseStockFetcher:
+    def __init__(self):
+        """Initialize Supabase client"""
+        try:
+            self.supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            self._test_connection()
+        except Exception as e:
+            logger.error(f"Failed to initialize Supabase client: {e}")
+            self.supabase = None
+    
+    def _test_connection(self):
+        """Test Supabase connection"""
+        try:
+            # Simple query to test connection
+            result = self.supabase.table('stock_universe').select('id').limit(1).execute()
+            logger.info("✅ Supabase connection successful")
+        except Exception as e:
+            logger.error(f"❌ Supabase connection test failed: {e}")
+            raise e
+    
+    def fetch_stocks_by_type(self, stock_type: str = 'combined') -> pd.DataFrame:
+        """
+        Fetch stocks from Supabase database
+        
+        Args:
+            stock_type: 'nifty100', 'midcap150', or 'combined'
+        
+        Returns:
+            DataFrame with columns: Company Name, Symbol, ISIN Code
+        """
+        if not self.supabase:
+            raise Exception("Supabase client not initialized")
+        
+        try:
+            # Use the SQL function we created
+            result = self.supabase.rpc('get_stocks_by_type', {'stock_type': stock_type}).execute()
+            
+            if not result.data:
+                logger.warning(f"No stocks found for type: {stock_type}")
+                return pd.DataFrame(columns=['Company Name', 'Symbol', 'ISIN Code'])
+            
+            # Convert to DataFrame and format for your app
+            stocks_df = pd.DataFrame(result.data)
+            
+            # Rename columns to match your app's expectations
+            stocks_df = stocks_df.rename(columns={
+                'company_name': 'Company Name',
+                'symbol': 'Symbol',
+                'isin_code': 'ISIN Code'
+            })
+            
+            # Ensure Symbol column doesn't have .NS suffix
+            stocks_df['Symbol'] = stocks_df['Symbol'].str.replace('.NS', '', regex=False)
+            
+            # Remove any empty symbols
+            stocks_df = stocks_df[stocks_df['Symbol'].str.len() > 0]
+            
+            logger.info(f"Fetched {len(stocks_df)} stocks for {stock_type}")
+            return stocks_df[['Company Name', 'Symbol', 'ISIN Code']]
+            
+        except Exception as e:
+            logger.error(f"Error fetching stocks from Supabase: {e}")
+            raise e
+    
+    def get_database_stats(self) -> Dict[str, Any]:
+        """Get statistics about the database"""
+        if not self.supabase:
+            return {}
+        
+        try:
+            # Count stocks by index type
+            nifty100_count = self.supabase.table('stock_universe').select('id').eq('index_type', 'NIFTY100').eq('is_active', True).execute()
+            midcap150_count = self.supabase.table('stock_universe').select('id').eq('index_type', 'NIFTY_MIDCAP_150').eq('is_active', True).execute()
+            
+            # Get last update info
+            last_update = self.supabase.table('data_update_log').select('*').order('created_at', desc=True).limit(1).execute()
+            
+            return {
+                'nifty100_count': len(nifty100_count.data),
+                'midcap150_count': len(midcap150_count.data),
+                'total_count': len(nifty100_count.data) + len(midcap150_count.data),
+                'last_update': last_update.data[0] if last_update.data else None,
+                'database_status': 'healthy'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting database stats: {e}")
+            return {'database_status': 'error', 'error': str(e)}
+
+# Global fetcher instance
+try:
+    fetcher = SupabaseStockFetcher()
+except Exception as e:
+    logger.error(f"Failed to create global fetcher: {e}")
+    fetcher = None
 
 def get_nifty_100_stocks() -> pd.DataFrame:
     """
-    Fetch current NIFTY 100 stock list with company names and symbols
+    Fetch current NIFTY 100 stock list from Supabase database
     """
-    # Sample NIFTY 100 stocks - this would ideally be fetched from official NSE API
-    # For now, using a comprehensive list based on current market data
-    nifty_100_stocks = [
-        {"Company Name": "TCS", "Symbol": "TCS.NS", "ISIN Code": "INE467B01029"},
-        {"Company Name": "Reliance Industries", "Symbol": "RELIANCE.NS", "ISIN Code": "INE002A01018"},
-        {"Company Name": "HDFC Bank", "Symbol": "HDFCBANK.NS", "ISIN Code": "INE040A01034"},
-        {"Company Name": "Infosys", "Symbol": "INFY.NS", "ISIN Code": "INE009A01021"},
-        {"Company Name": "ICICI Bank", "Symbol": "ICICIBANK.NS", "ISIN Code": "INE090A01013"},
-        {"Company Name": "Hindustan Unilever", "Symbol": "HINDUNILVR.NS", "ISIN Code": "INE030A01027"},
-        {"Company Name": "SBI", "Symbol": "SBIN.NS", "ISIN Code": "INE062A01020"},
-        {"Company Name": "Bharti Airtel", "Symbol": "BHARTIARTL.NS", "ISIN Code": "INE397D01024"},
-        {"Company Name": "ITC", "Symbol": "ITC.NS", "ISIN Code": "INE154A01025"},
-        {"Company Name": "Kotak Mahindra Bank", "Symbol": "KOTAKBANK.NS", "ISIN Code": "INE237A01028"},
-        {"Company Name": "Larsen & Toubro", "Symbol": "LT.NS", "ISIN Code": "INE018A01030"},
-        {"Company Name": "Axis Bank", "Symbol": "AXISBANK.NS", "ISIN Code": "INE238A01034"},
-        {"Company Name": "Bajaj Finance", "Symbol": "BAJFINANCE.NS", "ISIN Code": "INE296A01024"},
-        {"Company Name": "HCL Technologies", "Symbol": "HCLTECH.NS", "ISIN Code": "INE860A01027"},
-        {"Company Name": "Maruti Suzuki", "Symbol": "MARUTI.NS", "ISIN Code": "INE585B01010"},
-        {"Company Name": "Asian Paints", "Symbol": "ASIANPAINT.NS", "ISIN Code": "INE021A01026"},
-        {"Company Name": "Wipro", "Symbol": "WIPRO.NS", "ISIN Code": "INE075A01022"},
-        {"Company Name": "Nestle India", "Symbol": "NESTLEIND.NS", "ISIN Code": "INE239A01016"},
-        {"Company Name": "Mahindra & Mahindra", "Symbol": "M&M.NS", "ISIN Code": "INE101A01026"},
-        {"Company Name": "Adani Enterprises", "Symbol": "ADANIENT.NS", "ISIN Code": "INE423A01024"},
-        {"Company Name": "Tata Motors", "Symbol": "TATAMOTORS.NS", "ISIN Code": "INE155A01022"},
-        {"Company Name": "Sun Pharmaceutical", "Symbol": "SUNPHARMA.NS", "ISIN Code": "INE044A01036"},
-        {"Company Name": "Bajaj Auto", "Symbol": "BAJAJ-AUTO.NS", "ISIN Code": "INE917I01010"},
-        {"Company Name": "Titan Company", "Symbol": "TITAN.NS", "ISIN Code": "INE280A01028"},
-        {"Company Name": "Power Grid Corp", "Symbol": "POWERGRID.NS", "ISIN Code": "INE752E01010"},
-        {"Company Name": "Tech Mahindra", "Symbol": "TECHM.NS", "ISIN Code": "INE669C01036"},
-        {"Company Name": "UltraTech Cement", "Symbol": "ULTRACEMCO.NS", "ISIN Code": "INE481G01011"},
-        {"Company Name": "Tata Steel", "Symbol": "TATASTEEL.NS", "ISIN Code": "INE081A01020"},
-        {"Company Name": "Dr. Reddy's Labs", "Symbol": "DRREDDY.NS", "ISIN Code": "INE089A01023"},
-        {"Company Name": "JSW Steel", "Symbol": "JSWSTEEL.NS", "ISIN Code": "INE019A01038"},
-        {"Company Name": "Bajaj Finserv", "Symbol": "BAJAJFINSV.NS", "ISIN Code": "INE918I01018"},
-        {"Company Name": "Coal India", "Symbol": "COALINDIA.NS", "ISIN Code": "INE522F01014"},
-        {"Company Name": "Britannia Industries", "Symbol": "BRITANNIA.NS", "ISIN Code": "INE216A01030"},
-        {"Company Name": "Hindalco Industries", "Symbol": "HINDALCO.NS", "ISIN Code": "INE038A01020"},
-        {"Company Name": "Tata Consultancy Services", "Symbol": "TCS.NS", "ISIN Code": "INE467B01029"},
-        {"Company Name": "Cipla", "Symbol": "CIPLA.NS", "ISIN Code": "INE059A01026"},
-        {"Company Name": "Grasim Industries", "Symbol": "GRASIM.NS", "ISIN Code": "INE047A01021"},
-        {"Company Name": "HDFC Life", "Symbol": "HDFCLIFE.NS", "ISIN Code": "INE795G01014"},
-        {"Company Name": "SBI Life Insurance", "Symbol": "SBILIFE.NS", "ISIN Code": "INE123W01016"},
-        {"Company Name": "ICICI Prudential Life", "Symbol": "ICICIPRULI.NS", "ISIN Code": "INE726G01019"},
-        {"Company Name": "Eicher Motors", "Symbol": "EICHERMOT.NS", "ISIN Code": "INE066A01021"},
-        {"Company Name": "Divi's Laboratories", "Symbol": "DIVISLAB.NS", "ISIN Code": "INE361B01024"},
-        {"Company Name": "HUL", "Symbol": "HINDUNILVR.NS", "ISIN Code": "INE030A01027"},
-        {"Company Name": "Adani Ports", "Symbol": "ADANIPORTS.NS", "ISIN Code": "INE742F01042"},
-        {"Company Name": "NTPC", "Symbol": "NTPC.NS", "ISIN Code": "INE733E01010"},
-        {"Company Name": "ONGC", "Symbol": "ONGC.NS", "ISIN Code": "INE213A01029"},
-        {"Company Name": "IOC", "Symbol": "IOC.NS", "ISIN Code": "INE242A01010"},
-        {"Company Name": "Vedanta", "Symbol": "VEDL.NS", "ISIN Code": "INE205A01025"},
-        {"Company Name": "Shree Cement", "Symbol": "SHREECEM.NS", "ISIN Code": "INE070A01015"},
-        {"Company Name": "Divis Lab", "Symbol": "DIVISLAB.NS", "ISIN Code": "INE361B01024"},
-        {"Company Name": "Adani Green Energy", "Symbol": "ADANIGREEN.NS", "ISIN Code": "INE364U01010"},
-        {"Company Name": "IndusInd Bank", "Symbol": "INDUSINDBK.NS", "ISIN Code": "INE095A01012"},
-        {"Company Name": "Tata Consumer", "Symbol": "TATACONSUM.NS", "ISIN Code": "INE192A01025"},
-        {"Company Name": "Bajaj Holdings", "Symbol": "BAJAJHLDNG.NS", "ISIN Code": "INE118A01012"},
-        {"Company Name": "Godrej Consumer", "Symbol": "GODREJCP.NS", "ISIN Code": "INE102D01028"},
-        {"Company Name": "Hindustan Zinc", "Symbol": "HINDZINC.NS", "ISIN Code": "INE267A01025"},
-        {"Company Name": "Bhel", "Symbol": "BHEL.NS", "ISIN Code": "INE257A01026"},
-        {"Company Name": "Sbi Cards", "Symbol": "SBICARD.NS", "ISIN Code": "INE018E01016"},
-        {"Company Name": "Biocon", "Symbol": "BIOCON.NS", "ISIN Code": "INE376G01013"},
-        {"Company Name": "Pidilite Industries", "Symbol": "PIDILITIND.NS", "ISIN Code": "INE318A01026"},
-        {"Company Name": "Colgate Palmolive", "Symbol": "COLPAL.NS", "ISIN Code": "INE259A01022"},
-        {"Company Name": "Marico", "Symbol": "MARICO.NS", "ISIN Code": "INE196A01026"},
-        {"Company Name": "Berger Paints", "Symbol": "BERGEPAINT.NS", "ISIN Code": "INE463A01038"},
-        {"Company Name": "Aurobindo Pharma", "Symbol": "AUROPHARMA.NS", "ISIN Code": "INE406A01037"},
-        {"Company Name": "Lupin", "Symbol": "LUPIN.NS", "ISIN Code": "INE326A01037"},
-        {"Company Name": "Alkem Laboratories", "Symbol": "ALKEMLAB.NS", "ISIN Code": "INE540L01014"},
-        {"Company Name": "Siemens", "Symbol": "SIEMENS.NS", "ISIN Code": "INE003A01024"},
-        {"Company Name": "Bosch", "Symbol": "BOSCHLTD.NS", "ISIN Code": "INE323A01026"},
-        {"Company Name": "Abbott India", "Symbol": "ABBOTINDIA.NS", "ISIN Code": "INE358A01014"},
-        {"Company Name": "Dabur India", "Symbol": "DABUR.NS", "ISIN Code": "INE016A01026"},
-        {"Company Name": "United Spirits", "Symbol": "UBL.NS", "ISIN Code": "INE686F01025"},
-        {"Company Name": "Torrent Pharma", "Symbol": "TORNTPHARM.NS", "ISIN Code": "INE685A01028"},
-        {"Company Name": "Motherson Sumi", "Symbol": "MOTHERSON.NS", "ISIN Code": "INE775A01035"},
-        {"Company Name": "Gland Pharma", "Symbol": "GLAND.NS", "ISIN Code": "INE068V01023"},
-        {"Company Name": "Muthoot Finance", "Symbol": "MUTHOOTFIN.NS", "ISIN Code": "INE414G01012"},
-        {"Company Name": "Indigo", "Symbol": "INDIGO.NS", "ISIN Code": "INE646L01027"},
-        {"Company Name": "Zomato", "Symbol": "ZOMATO.NS", "ISIN Code": "INE758T01015"},
-        {"Company Name": "Paytm", "Symbol": "PAYTM.NS", "ISIN Code": "INE982J01020"},
-        {"Company Name": "Nykaa", "Symbol": "NYKAA.NS", "ISIN Code": "INE388Y01029"},
-        {"Company Name": "PolicyBazaar", "Symbol": "POLICYBZR.NS", "ISIN Code": "INE417T01026"},
-        {"Company Name": "LIC", "Symbol": "LICI.NS", "ISIN Code": "INE0J1Y01017"},
-        {"Company Name": "IRCTC", "Symbol": "IRCTC.NS", "ISIN Code": "INE335Y01020"},
-        {"Company Name": "BEL", "Symbol": "BEL.NS", "ISIN Code": "INE263A01024"},
-        {"Company Name": "HAL", "Symbol": "HAL.NS", "ISIN Code": "INE066F01012"},
-        {"Company Name": "Mazagon Dock", "Symbol": "MAZDOCK.NS", "ISIN Code": "INE249Z01012"},
-        {"Company Name": "SAIL", "Symbol": "SAIL.NS", "ISIN Code": "INE114A01011"},
-        {"Company Name": "NMDC", "Symbol": "NMDC.NS", "ISIN Code": "INE584A01023"},
-        {"Company Name": "GAIL", "Symbol": "GAIL.NS", "ISIN Code": "INE129A01019"},
-        {"Company Name": "Petronet LNG", "Symbol": "PETRONET.NS", "ISIN Code": "INE347G01014"},
-        {"Company Name": "IGL", "Symbol": "IGL.NS", "ISIN Code": "INE203G01027"},
-        {"Company Name": "MRF", "Symbol": "MRF.NS", "ISIN Code": "INE883A01011"},
-        {"Company Name": "Apollo Hospitals", "Symbol": "APOLLOHOSP.NS", "ISIN Code": "INE437A01024"},
-        {"Company Name": "Fortis Healthcare", "Symbol": "FORTIS.NS", "ISIN Code": "INE061F01013"},
-        {"Company Name": "Max Healthcare", "Symbol": "MAXHEALTH.NS", "ISIN Code": "INE027H01010"},
-        {"Company Name": "Narayana Health", "Symbol": "NH.NS", "ISIN Code": "INE410P01011"},
-        {"Company Name": "Dmart", "Symbol": "DMART.NS", "ISIN Code": "INE192R01011"},
-        {"Company Name": "Trent", "Symbol": "TRENT.NS", "ISIN Code": "INE849A01020"},
-        {"Company Name": "Jubilant FoodWorks", "Symbol": "JUBLFOOD.NS", "ISIN Code": "INE797F01012"},
-        {"Company Name": "P&G Hygiene", "Symbol": "PGHH.NS", "ISIN Code": "INE179A01014"},
-        {"Company Name": "Emami", "Symbol": "EMAMILTD.NS", "ISIN Code": "INE548C01032"},
-        {"Company Name": "Honeywell Automation", "Symbol": "HONAUT.NS", "ISIN Code": "INE671A01010"},
-        {"Company Name": "3M India", "Symbol": "3MINDIA.NS", "ISIN Code": "INE470A01017"},
-        {"Company Name": "Whirlpool India", "Symbol": "WHIRLPOOL.NS", "ISIN Code": "INE716A01013"},
-        {"Company Name": "Voltas", "Symbol": "VOLTAS.NS", "ISIN Code": "INE226A01021"},
-        {"Company Name": "Blue Star", "Symbol": "BLUESTARCO.NS", "ISIN Code": "INE472A01039"},
-        {"Company Name": "Crompton Greaves", "Symbol": "CROMPTON.NS", "ISIN Code": "INE299U01018"},
-        {"Company Name": "Havells India", "Symbol": "HAVELLS.NS", "ISIN Code": "INE176B01034"},
-        {"Company Name": "V-Guard Industries", "Symbol": "VGUARD.NS", "ISIN Code": "INE951I01027"},
-        {"Company Name": "Polycab India", "Symbol": "POLYCAB.NS", "ISIN Code": "INE455K01017"}
-    ]
+    if not fetcher:
+        st.error("❌ Database connection not available")
+        st.error("💡 **Solution**: Please check your Supabase configuration or upload a CSV file")
+        raise Exception("Database connection failed")
     
-    return pd.DataFrame(nifty_100_stocks)
+    try:
+        with st.spinner("Fetching NIFTY 100 stocks from database..."):
+            df = fetcher.fetch_stocks_by_type('nifty100')
+            
+            if df.empty:
+                st.warning("⚠️ No NIFTY 100 stocks found in database")
+                st.error("💡 **Solution**: Please run the data population script or upload a CSV file")
+                raise Exception("No NIFTY 100 data in database")
+            
+            st.success(f"✅ Fetched {len(df)} NIFTY 100 stocks from database")
+            return df
+            
+    except Exception as e:
+        st.error(f"❌ Error fetching NIFTY 100: {e}")
+        st.error("💡 **Solution**: Please upload a CSV file with NIFTY 100 stocks in the 'Upload CSV File' option")
+        logger.error(f"Error in get_nifty_100_stocks: {e}")
+        raise e
 
 def get_nifty_midcap_150_stocks() -> pd.DataFrame:
     """
-    Fetch current NIFTY MIDCAP 150 stock list with company names and symbols
+    Fetch current NIFTY MIDCAP 150 stock list from Supabase database
     """
-    # Sample NIFTY MIDCAP 150 stocks
-    nifty_midcap_150_stocks = [
-        {"Company Name": "ACC", "Symbol": "ACC.NS", "ISIN Code": "INE012A01025"},
-        {"Company Name": "Apollo Tyres", "Symbol": "APOLLOTYRE.NS", "ISIN Code": "INE438A01022"},
-        {"Company Name": "Ashok Leyland", "Symbol": "ASHOKLEY.NS", "ISIN Code": "INE208A01029"},
-        {"Company Name": "Balkrishna Industries", "Symbol": "BALKRISIND.NS", "ISIN Code": "INE787D01026"},
-        {"Company Name": "Berger Paints India", "Symbol": "BERGEPAINT.NS", "ISIN Code": "INE463A01038"},
-        {"Company Name": "Bharat Forge", "Symbol": "BHARATFORG.NS", "ISIN Code": "INE465A01025"},
-        {"Company Name": "Blue Star", "Symbol": "BLUESTARCO.NS", "ISIN Code": "INE472A01039"},
-        {"Company Name": "Canara Bank", "Symbol": "CANBK.NS", "ISIN Code": "INE476A01022"},
-        {"Company Name": "Cummins India", "Symbol": "CUMMINSIND.NS", "ISIN Code": "INE298A01020"},
-        {"Company Name": "Escorts Kubota", "Symbol": "ESCORTS.NS", "ISIN Code": "INE042A01014"},
-        {"Company Name": "Exide Industries", "Symbol": "EXIDEIND.NS", "ISIN Code": "INE302A01020"},
-        {"Company Name": "Federal Bank", "Symbol": "FEDERALBNK.NS", "ISIN Code": "INE171A01029"},
-        {"Company Name": "Godrej Properties", "Symbol": "GODREJPROP.NS", "ISIN Code": "INE484J01027"},
-        {"Company Name": "Havells India", "Symbol": "HAVELLS.NS", "ISIN Code": "INE176B01034"},
-        {"Company Name": "Hero MotoCorp", "Symbol": "HEROMOTOCO.NS", "ISIN Code": "INE158A01026"},
-        {"Company Name": "Indian Bank", "Symbol": "INDIANB.NS", "ISIN Code": "INE562A01011"},
-        {"Company Name": "Indian Hotels", "Symbol": "INDHOTEL.NS", "ISIN Code": "INE053A01029"},
-        {"Company Name": "JK Cement", "Symbol": "JKCEMENT.NS", "ISIN Code": "INE823G01014"},
-        {"Company Name": "L&T Finance", "Symbol": "L&TFH.NS", "ISIN Code": "INE498L01015"},
-        {"Company Name": "Laurus Labs", "Symbol": "LAURUSLABS.NS", "ISIN Code": "INE947Q01028"},
-        {"Company Name": "Mphasis", "Symbol": "MPHASIS.NS", "ISIN Code": "INE356A01018"},
-        {"Company Name": "Persistent Systems", "Symbol": "PERSISTENT.NS", "ISIN Code": "INE262H01013"},
-        {"Company Name": "Phoenix Mills", "Symbol": "PHOENIXLTD.NS", "ISIN Code": "INE211B01039"},
-        {"Company Name": "PNB", "Symbol": "PNB.NS", "ISIN Code": "INE160A01022"},
-        {"Company Name": "Polycab India", "Symbol": "POLYCAB.NS", "ISIN Code": "INE455K01017"},
-        {"Company Name": "Ramco Cements", "Symbol": "RAMCOCEM.NS", "ISIN Code": "INE331A01037"},
-        {"Company Name": "SRF", "Symbol": "SRF.NS", "ISIN Code": "INE647A01010"},
-        {"Company Name": "Sundaram Finance", "Symbol": "SUNDARMFIN.NS", "ISIN Code": "INE660A01013"},
-        {"Company Name": "Tata Elxsi", "Symbol": "TATAELXSI.NS", "ISIN Code": "INE670A01012"},
-        {"Company Name": "Thermax", "Symbol": "THERMAX.NS", "ISIN Code": "INE152A01029"},
-        {"Company Name": "TVS Motor", "Symbol": "TVSMOTOR.NS", "ISIN Code": "INE494B01023"},
-        {"Company Name": "UPL", "Symbol": "UPL.NS", "ISIN Code": "INE628A01036"},
-        {"Company Name": "Varun Beverages", "Symbol": "VBL.NS", "ISIN Code": "INE200M01021"},
-        {"Company Name": "Voltas", "Symbol": "VOLTAS.NS", "ISIN Code": "INE226A01021"},
-        {"Company Name": "Whirlpool India", "Symbol": "WHIRLPOOL.NS", "ISIN Code": "INE716A01013"},
-        {"Company Name": "Zydus Lifesciences", "Symbol": "ZYDUSLIFE.NS", "ISIN Code": "INE010B01027"},
-        {"Company Name": "Aditya Birla Capital", "Symbol": "ABCAPITAL.NS", "ISIN Code": "INE674K01013"},
-        {"Company Name": "Alkem Laboratories", "Symbol": "ALKEMLAB.NS", "ISIN Code": "INE540L01014"},
-        {"Company Name": "Amara Raja", "Symbol": "AMARAJABAT.NS", "ISIN Code": "INE885A01032"},
-        {"Company Name": "Ambuja Cements", "Symbol": "AMBUJACEM.NS", "ISIN Code": "INE079A01024"},
-        {"Company Name": "Astral", "Symbol": "ASTRAL.NS", "ISIN Code": "INE006I01046"},
-        {"Company Name": "AU Small Finance Bank", "Symbol": "AUBANK.NS", "ISIN Code": "INE949L01017"},
-        {"Company Name": "Bajaj Consumer", "Symbol": "BAJAJCON.NS", "ISIN Code": "INE933K01021"},
-        {"Company Name": "Bandhan Bank", "Symbol": "BANDHANBNK.NS", "ISIN Code": "INE545U01014"},
-        {"Company Name": "Bank of Baroda", "Symbol": "BANKBARODA.NS", "ISIN Code": "INE028A01039"},
-        {"Company Name": "Bank of India", "Symbol": "BANKINDIA.NS", "ISIN Code": "INE084A01016"},
-        {"Company Name": "Bata India", "Symbol": "BATAINDIA.NS", "ISIN Code": "INE176A01028"},
-        {"Company Name": "Bharti Hexacom", "Symbol": "BHARTIHEX.NS", "ISIN Code": "INE785E01024"},
-        {"Company Name": "CG Power", "Symbol": "CGPOWER.NS", "ISIN Code": "INE067A01029"},
-        {"Company Name": "Chambal Fertilizers", "Symbol": "CHAMBLFERT.NS", "ISIN Code": "INE085A01013"},
-        {"Company Name": "Cholamandalam Investment", "Symbol": "CHOLAFIN.NS", "ISIN Code": "INE121A01016"},
-        {"Company Name": "City Union Bank", "Symbol": "CUB.NS", "ISIN Code": "INE491A01021"},
-        {"Company Name": "Coforge", "Symbol": "COFORGE.NS", "ISIN Code": "INE591G01017"},
-        {"Company Name": "Concor", "Symbol": "CONCOR.NS", "ISIN Code": "INE042A01014"},
-        {"Company Name": "Coromandel International", "Symbol": "COROMANDEL.NS", "ISIN Code": "INE169A01031"},
-        {"Company Name": "CRISIL", "Symbol": "CRISIL.NS", "ISIN Code": "INE007A01025"},
-        {"Company Name": "Deepak Nitrite", "Symbol": "DEEPAKNTR.NS", "ISIN Code": "INE288B01029"},
-        {"Company Name": "Delhivery", "Symbol": "DELHIVERY.NS", "ISIN Code": "INE148O01028"},
-        {"Company Name": "Dixon Technologies", "Symbol": "DIXON.NS", "ISIN Code": "INE935N01020"},
-        {"Company Name": "Endurance Technologies", "Symbol": "ENDURANCE.NS", "ISIN Code": "INE913H01037"},
-        {"Company Name": "FDC", "Symbol": "FDC.NS", "ISIN Code": "INE258B01022"},
-        {"Company Name": "Finolex Cables", "Symbol": "FINCABLES.NS", "ISIN Code": "INE235A01022"},
-        {"Company Name": "Fortis Healthcare", "Symbol": "FORTIS.NS", "ISIN Code": "INE061F01013"},
-        {"Company Name": "FSN E-Commerce", "Symbol": "NYKAA.NS", "ISIN Code": "INE388Y01029"},
-        {"Company Name": "GAIL", "Symbol": "GAIL.NS", "ISIN Code": "INE129A01019"},
-        {"Company Name": "Gillette India", "Symbol": "GILLETTE.NS", "ISIN Code": "INE322A01010"},
-        {"Company Name": "Glaxo SmithKline Pharma", "Symbol": "GLAXO.NS", "ISIN Code": "INE159A01016"},
-        {"Company Name": "GMR Airports", "Symbol": "GMRAIRPORT.NS", "ISIN Code": "INE776C01039"},
-        {"Company Name": "Godrej Industries", "Symbol": "GODREJIND.NS", "ISIN Code": "INE233A01035"},
-        {"Company Name": "Granules India", "Symbol": "GRANULES.NS", "ISIN Code": "INE101D01020"},
-        {"Company Name": "Gujarat Gas", "Symbol": "GUJGASLTD.NS", "ISIN Code": "INE844O01030"},
-        {"Company Name": "Hindustan Aeronautics", "Symbol": "HAL.NS", "ISIN Code": "INE066F01012"},
-        {"Company Name": "HDFC AMC", "Symbol": "HDFCAMC.NS", "ISIN Code": "INE127D01025"},
-        {"Company Name": "Honeywell Automation", "Symbol": "HONAUT.NS", "ISIN Code": "INE671A01010"},
-        {"Company Name": "ICICI Securities", "Symbol": "ISEC.NS", "ISIN Code": "INE763G01038"},
-        {"Company Name": "IDBI Bank", "Symbol": "IDBI.NS", "ISIN Code": "INE008A01015"},
-        {"Company Name": "IDFC First Bank", "Symbol": "IDFCFIRSTB.NS", "ISIN Code": "INE092T01019"},
-        {"Company Name": "Indian Railway Catering", "Symbol": "IRCTC.NS", "ISIN Code": "INE335Y01020"},
-        {"Company Name": "Info Edge", "Symbol": "NAUKRI.NS", "ISIN Code": "INE663F01024"},
-        {"Company Name": "Ipca Laboratories", "Symbol": "IPCALAB.NS", "ISIN Code": "INE571A01038"},
-        {"Company Name": "JB Chemicals", "Symbol": "JBCHEPHARM.NS", "ISIN Code": "INE572A01036"},
-        {"Company Name": "Jindal Steel & Power", "Symbol": "JINDALSTEL.NS", "ISIN Code": "INE749A01030"},
-        {"Company Name": "JSW Energy", "Symbol": "JSWENERGY.NS", "ISIN Code": "INE121E01018"},
-        {"Company Name": "Jubilant FoodWorks", "Symbol": "JUBLFOOD.NS", "ISIN Code": "INE797F01012"},
-        {"Company Name": "Kalyan Jewellers", "Symbol": "KALYANKJIL.NS", "ISIN Code": "INE303R01014"},
-        {"Company Name": "KEI Industries", "Symbol": "KEI.NS", "ISIN Code": "INE878B01027"},
-        {"Company Name": "L&T Technology", "Symbol": "LTTS.NS", "ISIN Code": "INE010V01017"},
-        {"Company Name": "Lemon Tree Hotels", "Symbol": "LEMONTREE.NS", "ISIN Code": "INE970X01018"},
-        {"Company Name": "Mahindra Holidays", "Symbol": "MHRIL.NS", "ISIN Code": "INE998I01010"},
-        {"Company Name": "Mahanagar Gas", "Symbol": "MGL.NS", "ISIN Code": "INE002S01010"},
-        {"Company Name": "Manappuram Finance", "Symbol": "MANAPPURAM.NS", "ISIN Code": "INE522D01027"},
-        {"Company Name": "Max Financial Services", "Symbol": "MFSL.NS", "ISIN Code": "INE180A01020"},
-        {"Company Name": "Max Healthcare", "Symbol": "MAXHEALTH.NS", "ISIN Code": "INE027H01010"},
-        {"Company Name": "Medplus Health", "Symbol": "MEDPLUS.NS", "ISIN Code": "INE804L01010"},
-        {"Company Name": "Mindtree", "Symbol": "MINDTREE.NS", "ISIN Code": "INE018I01017"},
-        {"Company Name": "Motilal Oswal", "Symbol": "MOTILALOFS.NS", "ISIN Code": "INE338I01027"},
-        {"Company Name": "MRF", "Symbol": "MRF.NS", "ISIN Code": "INE883A01011"},
-        {"Company Name": "Muthoot Finance", "Symbol": "MUTHOOTFIN.NS", "ISIN Code": "INE414G01012"},
-        {"Company Name": "Navin Fluorine", "Symbol": "NAVINFLUOR.NS", "ISIN Code": "INE048G01026"},
-        {"Company Name": "NHPC", "Symbol": "NHPC.NS", "ISIN Code": "INE848E01016"},
-        {"Company Name": "NLC India", "Symbol": "NLCINDIA.NS", "ISIN Code": "INE589A01014"},
-        {"Company Name": "Oberoi Realty", "Symbol": "OBEROIRLTY.NS", "ISIN Code": "INE093I01010"},
-        {"Company Name": "Oil India", "Symbol": "OIL.NS", "ISIN Code": "INE274J01014"},
-        {"Company Name": "One97 Communications", "Symbol": "PAYTM.NS", "ISIN Code": "INE982J01020"},
-        {"Company Name": "Page Industries", "Symbol": "PAGEIND.NS", "ISIN Code": "INE761H01022"},
-        {"Company Name": "Petronet LNG", "Symbol": "PETRONET.NS", "ISIN Code": "INE347G01014"},
-        {"Company Name": "PI Industries", "Symbol": "PIIND.NS", "ISIN Code": "INE603J01030"},
-        {"Company Name": "Pidilite Industries", "Symbol": "PIDILITIND.NS", "ISIN Code": "INE318A01026"},
-        {"Company Name": "PVR INOX", "Symbol": "PVRINOX.NS", "ISIN Code": "INE191H01014"},
-        {"Company Name": "Quess Corp", "Symbol": "QUESS.NS", "ISIN Code": "INE615P01015"},
-        {"Company Name": "RBL Bank", "Symbol": "RBLBANK.NS", "ISIN Code": "INE976G01028"},
-        {"Company Name": "Relaxo Footwears", "Symbol": "RELAXO.NS", "ISIN Code": "INE131B01039"},
-        {"Company Name": "Sanofi India", "Symbol": "SANOFI.NS", "ISIN Code": "INE058A01010"},
-        {"Company Name": "Schaeffler India", "Symbol": "SCHAEFFLER.NS", "ISIN Code": "INE513A01022"},
-        {"Company Name": "Shriram Finance", "Symbol": "SHRIRAMFIN.NS", "ISIN Code": "INE721A01013"},
-        {"Company Name": "Sundaram Finance", "Symbol": "SUNDARMFIN.NS", "ISIN Code": "INE660A01013"},
-        {"Company Name": "Tata Communications", "Symbol": "TATACOMM.NS", "ISIN Code": "INE151A01013"},
-        {"Company Name": "Tata Power", "Symbol": "TATAPOWER.NS", "ISIN Code": "INE245A01021"},
-        {"Company Name": "Teamlease Services", "Symbol": "TEAMLEASE.NS", "ISIN Code": "INE985S01024"},
-        {"Company Name": "Tube Investments", "Symbol": "TIINDIA.NS", "ISIN Code": "INE974X01010"},
-        {"Company Name": "UCO Bank", "Symbol": "UCOBANK.NS", "ISIN Code": "INE691A01018"},
-        {"Company Name": "Union Bank of India", "Symbol": "UNIONBANK.NS", "ISIN Code": "INE692A01016"},
-        {"Company Name": "United Breweries", "Symbol": "UBL.NS", "ISIN Code": "INE686F01025"},
-        {"Company Name": "V-Guard Industries", "Symbol": "VGUARD.NS", "ISIN Code": "INE951I01027"},
-        {"Company Name": "Vaibhav Global", "Symbol": "VAIBHAVGBL.NS", "ISIN Code": "INE884A01027"},
-        {"Company Name": "Vodafone Idea", "Symbol": "IDEA.NS", "ISIN Code": "INE669E01016"},
-        {"Company Name": "Zee Entertainment", "Symbol": "ZEEL.NS", "ISIN Code": "INE256A01028"},
-        {"Company Name": "Zomato", "Symbol": "ZOMATO.NS", "ISIN Code": "INE758T01015"},
-        {"Company Name": "Zydus Lifesciences", "Symbol": "ZYDUSLIFE.NS", "ISIN Code": "INE010B01027"},
-        {"Company Name": "360 One WAM", "Symbol": "360ONE.NS", "ISIN Code": "INE466L01038"},
-        {"Company Name": "ABB India", "Symbol": "ABB.NS", "ISIN Code": "INE117A01022"},
-        {"Company Name": "Adani Power", "Symbol": "ADANIPOWER.NS", "ISIN Code": "INE814H01011"},
-        {"Company Name": "Adani Total Gas", "Symbol": "ATGL.NS", "ISIN Code": "INE399L01023"},
-        {"Company Name": "Affle India", "Symbol": "AFFLE.NS", "ISIN Code": "INE00WF01015"},
-        {"Company Name": "Alembic Pharmaceuticals", "Symbol": "APLLTD.NS", "ISIN Code": "INE885A01032"},
-        {"Company Name": "Alkyl Amines", "Symbol": "ALKYLAMINE.NS", "ISIN Code": "INE150C01011"},
-        {"Company Name": "Amber Enterprises", "Symbol": "AMBER.NS", "ISIN Code": "INE371P01015"},
-        {"Company Name": "Anant Raj", "Symbol": "ANANTRAJ.NS", "ISIN Code": "INE242B01030"},
-        {"Company Name": "Angel One", "Symbol": "ANGELONE.NS", "ISIN Code": "INE732I01013"},
-        {"Company Name": "Apar Industries", "Symbol": "APARINDS.NS", "ISIN Code": "INE372A01015"},
-        {"Company Name": "APL Apollo", "Symbol": "APLAPOLLO.NS", "ISIN Code": "INE702C01027"},
-        {"Company Name": "Archean Chemical", "Symbol": "ACI.NS", "ISIN Code": "INE128W01027"},
-        {"Company Name": "Arman Financial", "Symbol": "ARMANFIN.NS", "ISIN Code": "INE109C01017"},
-        {"Company Name": "Arvind", "Symbol": "ARVIND.NS", "ISIN Code": "INE034A01011"},
-        {"Company Name": "Ashoka Buildcon", "Symbol": "ASHOKA.NS", "ISIN Code": "INE442H01029"},
-        {"Company Name": "Avanti Feeds", "Symbol": "AVANTIFEED.NS", "ISIN Code": "INE871C01038"},
-        {"Company Name": "Axis Securities", "Symbol": "AXISSEC.NS", "ISIN Code": "INE917H01012"},
-        {"Company Name": "Bajaj Electricals", "Symbol": "BAJAJELEC.NS", "ISIN Code": "INE193E01025"},
-        {"Company Name": "Bharti Hexacom", "Symbol": "BHARTIHEX.NS", "ISIN Code": "INE785E01024"},
-        {"Company Name": "Birlasoft", "Symbol": "BSOFT.NS", "ISIN Code": "INE836A01035"},
-        {"Company Name": "BSE", "Symbol": "BSE.NS", "ISIN Code": "INE118H01025"},
-        {"Company Name": "CCL Products", "Symbol": "CCL.NS", "ISIN Code": "INE421D01022"},
-        {"Company Name": "Central Depository", "Symbol": "CDSL.NS", "ISIN Code": "INE736A01011"},
-        {"Company Name": "Century Plyboards", "Symbol": "CENTURYPLY.NS", "ISIN Code": "INE348B01021"},
-        {"Company Name": "Century Textiles", "Symbol": "CENTURYTEX.NS", "ISIN Code": "INE055A01016"},
-        {"Company Name": "Cera Sanitaryware", "Symbol": "CERA.NS", "ISIN Code": "INE739E01017"},
-        {"Company Name": "Clean Science", "Symbol": "CLEAN.NS", "ISIN Code": "INE227Y01021"},
-        {"Company Name": "Computer Age", "Symbol": "CAMS.NS", "ISIN Code": "INE596I01012"},
-        {"Company Name": "Craftsman Automation", "Symbol": "CRAFTSMAN.NS", "ISIN Code": "INE00LO01017"},
-        {"Company Name": "Crompton Greaves", "Symbol": "CROMPTON.NS", "ISIN Code": "INE299U01018"},
-        {"Company Name": "CSB Bank", "Symbol": "CSBBANK.NS", "ISIN Code": "INE679A01013"},
-        {"Company Name": "CreditAccess Grameen", "Symbol": "CREDITACC.NS", "ISIN Code": "INE741K01010"},
-        {"Company Name": "Data Patterns", "Symbol": "DATAPATTNS.NS", "ISIN Code": "INE0GJ001013"},
-        {"Company Name": "Dhanuka Agritech", "Symbol": "DHANUKA.NS", "ISIN Code": "INE435G01025"},
-        {"Company Name": "Divis Laboratories", "Symbol": "DIVISLAB.NS", "ISIN Code": "INE361B01024"},
-        {"Company Name": "Easy Trip Planners", "Symbol": "EASEMYTRIP.NS", "ISIN Code": "INE07O001026"},
-        {"Company Name": "Eicher Motors", "Symbol": "EICHERMOT.NS", "ISIN Code": "INE066A01021"},
-        {"Company Name": "Elgi Equipments", "Symbol": "ELGIEQUIP.NS", "ISIN Code": "INE285A01027"},
-        {"Company Name": "Embassy Office Parks", "Symbol": "EMBASSYOFREIT.NS", "ISIN Code": "INE0J7E01018"},
-        {"Company Name": "Emami", "Symbol": "EMAMILTD.NS", "ISIN Code": "INE548C01032"},
-        {"Company Name": "Fine Organic", "Symbol": "FINEORG.NS", "ISIN Code": "INE686Y01026"},
-        {"Company Name": "Five Star Business", "Symbol": "FIVESTAR.NS", "ISIN Code": "INE128S01021"},
-        {"Company Name": "GE Vernova T&D", "Symbol": "GVT&D.NS", "ISIN Code": "INE200J01021"},
-        {"Company Name": "General Insurance", "Symbol": "GICRE.NS", "ISIN Code": "INE481Y01014"},
-        {"Company Name": "Gensol Engineering", "Symbol": "GENSOL.NS", "ISIN Code": "INE955Y01029"},
-        {"Company Name": "GMM Pfaudler", "Symbol": "GMMPFAUDLR.NS", "ISIN Code": "INE030A01027"},
-        {"Company Name": "Go Fashion", "Symbol": "GOFASHION.NS", "ISIN Code": "INE0F0801014"},
-        {"Company Name": "Godrej Agrovet", "Symbol": "GODREJAGRM.NS", "ISIN Code": "INE850D01015"},
-        {"Company Name": "Greaves Cotton", "Symbol": "GREAVESCOT.NS", "ISIN Code": "INE224A01026"},
-        {"Company Name": "Gujarat State Petronet", "Symbol": "GSPL.NS", "ISIN Code": "INE246F01010"},
-        {"Company Name": "Hatsun Agro", "Symbol": "HATSUN.NS", "ISIN Code": "INE473B01035"},
-        {"Company Name": "HCL Technologies", "Symbol": "HCLTECH.NS", "ISIN Code": "INE860A01027"},
-        {"Company Name": "Hindustan Copper", "Symbol": "HINDCOPPER.NS", "ISIN Code": "INE531E01026"},
-        {"Company Name": "Hindustan Petroleum", "Symbol": "HINDPETRO.NS", "ISIN Code": "INE094A01015"},
-        {"Company Name": "Home First Finance", "Symbol": "HOMEFIRST.NS", "ISIN Code": "INE481N01014"},
-        {"Company Name": "HUDCO", "Symbol": "HUDCO.NS", "ISIN Code": "INE031A01017"},
-        {"Company Name": "ICICI Lombard", "Symbol": "ICICIGI.NS", "ISIN Code": "INE765G01017"},
-        {"Company Name": "India Cements", "Symbol": "INDIACEM.NS", "ISIN Code": "INE383A01012"},
-        {"Company Name": "Indian Oil Corp", "Symbol": "IOC.NS", "ISIN Code": "INE242A01010"},
-        {"Company Name": "Indian Overseas Bank", "Symbol": "IOB.NS", "ISIN Code": "INE565A01014"},
-        {"Company Name": "Indraprastha Gas", "Symbol": "IGL.NS", "ISIN Code": "INE203G01027"},
-        {"Company Name": "Intellect Design", "Symbol": "INTELLECT.NS", "ISIN Code": "INE306R01017"},
-        {"Company Name": "InterGlobe Aviation", "Symbol": "INDIGO.NS", "ISIN Code": "INE646L01027"},
-        {"Company Name": "IRCON International", "Symbol": "IRCON.NS", "ISIN Code": "INE962Y01021"},
-        {"Company Name": "IRFC", "Symbol": "IRFC.NS", "ISIN Code": "INE053F01010"},
-        {"Company Name": "JK Lakshmi Cement", "Symbol": "JKLAKSHMI.NS", "ISIN Code": "INE786A01032"},
-        {"Company Name": "JK Paper", "Symbol": "JKPAPER.NS", "ISIN Code": "INE789E01012"},
-        {"Company Name": "JM Financial", "Symbol": "JMFINANCIL.NS", "ISIN Code": "INE785A01025"},
-        {"Company Name": "Johnson Controls", "Symbol": "JCHAC.NS", "ISIN Code": "INE782A01025"},
-        {"Company Name": "Jyothy Labs", "Symbol": "JYOTHYLAB.NS", "ISIN Code": "INE668F01031"},
-        {"Company Name": "Kajaria Ceramics", "Symbol": "KAJARIACER.NS", "ISIN Code": "INE217B01036"},
-        {"Company Name": "Kansai Nerolac", "Symbol": "KANSAINER.NS", "ISIN Code": "INE531A01024"},
-        {"Company Name": "KEC International", "Symbol": "KEC.NS", "ISIN Code": "INE389H01022"},
-        {"Company Name": "Keystone Realtors", "Symbol": "KEYSTONE.NS", "ISIN Code": "INE846Y01028"},
-        {"Company Name": "Kfin Technologies", "Symbol": "KFINTECH.NS", "ISIN Code": "INE138Y01027"},
-        {"Company Name": "Kims", "Symbol": "KIMS.NS", "ISIN Code": "INE557P01021"},
-        {"Company Name": "KNR Constructions", "Symbol": "KNRCON.NS", "ISIN Code": "INE634I01029"},
-        {"Company Name": "Kotak Mahindra Bank", "Symbol": "KOTAKBANK.NS", "ISIN Code": "INE237A01028"},
-        {"Company Name": "Krishna Institute", "Symbol": "KPITTECH.NS", "ISIN Code": "INE570T01010"},
-        {"Company Name": "L&T Finance Holdings", "Symbol": "L&TFH.NS", "ISIN Code": "INE498L01015"},
-        {"Company Name": "Life Insurance Corp", "Symbol": "LICI.NS", "ISIN Code": "INE0J1Y01017"},
-        {"Company Name": "LTI Mindtree", "Symbol": "LTIM.NS", "ISIN Code": "INE214T01019"},
-        {"Company Name": "Macrotech Developers", "Symbol": "LODHA.NS", "ISIN Code": "INE195J01029"},
-        {"Company Name": "Mahanagar Telephone", "Symbol": "MTNL.NS", "ISIN Code": "INE153A01019"},
-        {"Company Name": "Mahindra & Mahindra Financial", "Symbol": "M&MFIN.NS", "ISIN Code": "INE774D01024"},
-        {"Company Name": "Mahindra Lifespace", "Symbol": "MAHLIFE.NS", "ISIN Code": "INE813A01018"},
-        {"Company Name": "Mastek", "Symbol": "MASTEK.NS", "ISIN Code": "INE759A01021"},
-        {"Company Name": "MindSpace Business Parks", "Symbol": "MINDSPACEREIT.NS", "ISIN Code": "INE0J8E01016"},
-        {"Company Name": "Mirae Asset", "Symbol": "MIRAEASSET.NS", "ISIN Code": "INE0O8801011"},
-        {"Company Name": "Motherson Sumi", "Symbol": "MOTHERSON.NS", "ISIN Code": "INE775A01035"},
-        {"Company Name": "Multi Commodity Exchange", "Symbol": "MCX.NS", "ISIN Code": "INE745G01035"},
-        {"Company Name": "Narayana Hrudayalaya", "Symbol": "NH.NS", "ISIN Code": "INE410P01011"},
-        {"Company Name": "National Aluminium", "Symbol": "NATIONALUM.NS", "ISIN Code": "INE139A01034"},
-        {"Company Name": "Nazara Technologies", "Symbol": "NAZARA.NS", "ISIN Code": "INE418Z01029"},
-        {"Company Name": "New India Assurance", "Symbol": "NIACL.NS", "ISIN Code": "INE470Y01017"},
-        {"Company Name": "NRB Bearings", "Symbol": "NRBBEARING.NS", "ISIN Code": "INE349A01021"},
-        {"Company Name": "Oracle Financial", "Symbol": "OFSS.NS", "ISIN Code": "INE881D01027"},
-        {"Company Name": "Piramal Enterprises", "Symbol": "PEL.NS", "ISIN Code": "INE140A01024"},
-        {"Company Name": "Poonawalla Fincorp", "Symbol": "POONAWALLA.NS", "ISIN Code": "INE511C01022"},
-        {"Company Name": "Power Finance Corp", "Symbol": "PFC.NS", "ISIN Code": "INE134E01011"},
-        {"Company Name": "Praj Industries", "Symbol": "PRAJIND.NS", "ISIN Code": "INE074A01025"},
-        {"Company Name": "Prince Pipes", "Symbol": "PRINCEPIPE.NS", "ISIN Code": "INE689W01016"},
-        {"Company Name": "Prism Johnson", "Symbol": "PRSMJOHNSN.NS", "ISIN Code": "INE010A01011"},
-        {"Company Name": "REC", "Symbol": "RECLTD.NS", "ISIN Code": "INE020B01018"},
-        {"Company Name": "Redington", "Symbol": "REDINGTON.NS", "ISIN Code": "INE891D01026"},
-        {"Company Name": "Rites", "Symbol": "RITES.NS", "ISIN Code": "INE320J01015"},
-        {"Company Name": "Route Mobile", "Symbol": "ROUTE.NS", "ISIN Code": "INE093R01031"},
-        {"Company Name": "Shankara Building", "Symbol": "SHANKARA.NS", "ISIN Code": "INE274V01019"},
-        {"Company Name": "Shree Renuka Sugars", "Symbol": "RENUKA.NS", "ISIN Code": "INE087H01022"},
-        {"Company Name": "Sona BLW", "Symbol": "SONACOMS.NS", "ISIN Code": "INE073301046"},
-        {"Company Name": "Star Health", "Symbol": "STARHEALTH.NS", "ISIN Code": "INE575P01011"},
-        {"Company Name": "Sterling Wilson", "Symbol": "SWSOLAR.NS", "ISIN Code": "INE00C801011"},
-        {"Company Name": "Sudarshan Chemical", "Symbol": "SUDARSCHEM.NS", "ISIN Code": "INE659A01023"},
-        {"Company Name": "Sumitomo Chemical", "Symbol": "SUMICHEM.NS", "ISIN Code": "INE258G01013"},
-        {"Company Name": "Sun TV Network", "Symbol": "SUNTV.NS", "ISIN Code": "INE424H01027"},
-        {"Company Name": "Sundram Fasteners", "Symbol": "SUNDRMFAST.NS", "ISIN Code": "INE387A01021"},
-        {"Company Name": "Supreme Industries", "Symbol": "SUPREMEIND.NS", "ISIN Code": "INE195A01028"},
-        {"Company Name": "Suzlon Energy", "Symbol": "SUZLON.NS", "ISIN Code": "INE040H01021"},
-        {"Company Name": "Syngene International", "Symbol": "SYNGENE.NS", "ISIN Code": "INE398R01022"},
-        {"Company Name": "Tata Investment Corp", "Symbol": "TAINVEST.NS", "ISIN Code": "INE092A01015"},
-        {"Company Name": "Tata Technologies", "Symbol": "TATATECH.NS", "ISIN Code": "INE142M01025"},
-        {"Company Name": "Tejas Networks", "Symbol": "TEJASNET.NS", "ISIN Code": "INE010J01012"},
-        {"Company Name": "Timken India", "Symbol": "TIMKEN.NS", "ISIN Code": "INE325A01013"},
-        {"Company Name": "Torrent Power", "Symbol": "TORNTPOWER.NS", "ISIN Code": "INE813H01021"},
-        {"Company Name": "Trident", "Symbol": "TRIDENT.NS", "ISIN Code": "INE064C01022"},
-        {"Company Name": "Ujjivan Small Finance", "Symbol": "UJJIVANSFB.NS", "ISIN Code": "INE551L01017"},
-        {"Company Name": "Usha Martin", "Symbol": "USHAMART.NS", "ISIN Code": "INE228A01035"},
-        {"Company Name": "Utkarsh Small Finance", "Symbol": "UTKARSHSFB.NS", "ISIN Code": "INE735W01017"},
-        {"Company Name": "Varroc Engineering", "Symbol": "VARROC.NS", "ISIN Code": "INE665L01035"},
-        {"Company Name": "Vedant Fashions", "Symbol": "MANYAVAR.NS", "ISIN Code": "INE825V01034"},
-        {"Company Name": "Vijaya Diagnostic", "Symbol": "VIJAYA.NS", "ISIN Code": "INE043W01015"},
-        {"Company Name": "Welspun Corp", "Symbol": "WELCORP.NS", "ISIN Code": "INE191B01025"},
-        {"Company Name": "Welspun India", "Symbol": "WELSPUNIND.NS", "ISIN Code": "INE274F01020"},
-        {"Company Name": "Westlife Development", "Symbol": "WESTLIFE.NS", "ISIN Code": "INE274F01020"},
-        {"Company Name": "Zydus Wellness", "Symbol": "ZYDUSWELL.NS", "ISIN Code": "INE768C01010"}
-    ]
+    if not fetcher:
+        st.error("❌ Database connection not available")
+        st.error("💡 **Solution**: Please check your Supabase configuration or upload a CSV file")
+        raise Exception("Database connection failed")
     
-    return pd.DataFrame(nifty_midcap_150_stocks)
+    try:
+        with st.spinner("Fetching NIFTY MIDCAP 150 stocks from database..."):
+            df = fetcher.fetch_stocks_by_type('midcap150')
+            
+            if df.empty:
+                st.warning("⚠️ No NIFTY MIDCAP 150 stocks found in database")
+                st.error("💡 **Solution**: Please run the data population script or upload a CSV file")
+                raise Exception("No NIFTY MIDCAP 150 data in database")
+            
+            st.success(f"✅ Fetched {len(df)} NIFTY MIDCAP 150 stocks from database")
+            return df
+            
+    except Exception as e:
+        st.error(f"❌ Error fetching NIFTY MIDCAP 150: {e}")
+        st.error("💡 **Solution**: Please upload a CSV file with NIFTY MIDCAP 150 stocks in the 'Upload CSV File' option")
+        logger.error(f"Error in get_nifty_midcap_150_stocks: {e}")
+        raise e
 
 def get_combined_nifty_stocks() -> pd.DataFrame:
     """
-    Get combined NIFTY 100 + NIFTY MIDCAP 150 stocks
+    Get combined NIFTY 100 + NIFTY MIDCAP 150 stocks from Supabase database
     """
-    nifty_100 = get_nifty_100_stocks()
-    nifty_midcap_150 = get_nifty_midcap_150_stocks()
+    if not fetcher:
+        st.error("❌ Database connection not available")
+        st.error("💡 **Solution**: Please check your Supabase configuration or upload a CSV file")
+        raise Exception("Database connection failed")
     
-    # Combine and remove duplicates based on Symbol
-    combined_df = pd.concat([nifty_100, nifty_midcap_150], ignore_index=True)
-    combined_df = combined_df.drop_duplicates(subset=['Symbol'], keep='first')
-    
-    return combined_df
+    try:
+        with st.spinner("Fetching combined NIFTY 100 + MIDCAP 150 stocks from database..."):
+            df = fetcher.fetch_stocks_by_type('combined')
+            
+            if df.empty:
+                st.warning("⚠️ No stocks found in database")
+                st.error("💡 **Solution**: Please run the data population script or upload a CSV file")
+                raise Exception("No stock data in database")
+            
+            # Get database stats for display
+            stats = fetcher.get_database_stats()
+            
+            st.success(f"✅ Combined dataset ready: {len(df)} unique stocks from database")
+            
+            # Show breakdown if stats available
+            if stats.get('database_status') == 'healthy':
+                st.info(f"📊 **Database**: {stats.get('nifty100_count', 0)} NIFTY 100 + {stats.get('midcap150_count', 0)} MIDCAP 150 = {len(df)} total stocks")
+                
+                # Show last update info
+                if stats.get('last_update'):
+                    last_update = stats['last_update']
+                    update_date = last_update.get('completed_at', 'Unknown')
+                    st.info(f"🕒 **Last Updated**: {update_date}")
+            
+            return df
+            
+    except Exception as e:
+        st.error(f"❌ Error creating combined dataset: {e}")
+        st.error("💡 **Solution**: Please upload a CSV file with your stock list in the 'Upload CSV File' option")
+        logger.error(f"Error in get_combined_nifty_stocks: {e}")
+        raise e
 
-@st.cache_data
+@st.cache_data(ttl=3600)  # Cache for 1 hour (database is already fast)
 def fetch_stock_data_cache(source: str = "combined") -> pd.DataFrame:
     """
-    Cached function to fetch stock data
+    Cached function to fetch stock data from Supabase database
+    TTL (Time To Live) = 3600 seconds = 1 hour
     """
-    if source == "combined":
-        return get_combined_nifty_stocks()
-    elif source == "nifty100":
-        return get_nifty_100_stocks()
-    elif source == "midcap150":
-        return get_nifty_midcap_150_stocks()
+    try:
+        if source == "combined":
+            return get_combined_nifty_stocks()
+        elif source == "nifty100":
+            return get_nifty_100_stocks()
+        elif source == "midcap150":
+            return get_nifty_midcap_150_stocks()
+        else:
+            return get_combined_nifty_stocks()
+            
+    except Exception as e:
+        st.error(f"❌ Error in fetch_stock_data_cache: {e}")
+        st.error("💡 **Solution**: Please use the 'Upload CSV File' option to provide your stock list")
+        logger.error(f"Error in fetch_stock_data_cache: {e}")
+        raise e
+
+def show_database_management():
+    """Show database management interface in Streamlit"""
+    st.subheader("💾 Database Management")
+    
+    if not fetcher:
+        st.error("❌ Database connection not available")
+        st.code("""
+# To fix this, update the credentials in stock_data_fetcher.py:
+SUPABASE_URL = "https://your-project.supabase.co"
+SUPABASE_KEY = "your-service-role-key"
+        """)
+        return
+    
+    # Get and display database stats
+    stats = fetcher.get_database_stats()
+    
+    if stats.get('database_status') == 'healthy':
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            st.metric("NIFTY 100 Stocks", stats.get('nifty100_count', 0))
+        
+        with col2:
+            st.metric("MIDCAP 150 Stocks", stats.get('midcap150_count', 0))
+        
+        with col3:
+            st.metric("Total Stocks", stats.get('total_count', 0))
+        
+        # Last update info
+        if stats.get('last_update'):
+            last_update = stats['last_update']
+            st.info(f"""
+            **Last Update**: {last_update.get('completed_at', 'Unknown')}  
+            **Type**: {last_update.get('update_type', 'Unknown')}  
+            **Status**: {last_update.get('status', 'Unknown')}  
+            **Records Added**: {last_update.get('records_added', 0)}
+            """)
+        
+        # Database actions
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            if st.button("🔄 Refresh Cache"):
+                st.cache_data.clear()
+                st.success("✅ Cache refreshed")
+                st.rerun()
+        
+        with col2:
+            st.info("💡 To update stocks, run the population script")
+        
+        with col3:
+            if st.button("📊 Test Connection"):
+                try:
+                    fetcher._test_connection()
+                    st.success("✅ Database connection OK")
+                except Exception as e:
+                    st.error(f"❌ Connection failed: {e}")
+    
     else:
-        return get_combined_nifty_stocks()
+        st.error(f"❌ Database error: {stats.get('error', 'Unknown error')}")
+        st.info("💡 Please check your Supabase configuration and run the population script")
+
+def clear_cache():
+    """Clear the Streamlit cache"""
+    try:
+        st.cache_data.clear()
+        st.success("✅ Cache cleared")
+        logger.info("Cache cleared successfully")
+    except Exception as e:
+        st.error(f"❌ Error clearing cache: {e}")
+        logger.error(f"Error clearing cache: {e}")
+
+# Test function for development
+def test_database_connection():
+    """Test the database connection and data retrieval"""
+    print("🧪 Testing Supabase stock fetcher...")
+    
+    if not fetcher:
+        print("❌ Failed to create fetcher")
+        return False
+    
+    try:
+        # Test each function
+        print("\n1. Testing NIFTY 100:")
+        nifty100 = fetcher.fetch_stocks_by_type('nifty100')
+        print(f"✅ Found {len(nifty100)} NIFTY 100 stocks")
+        
+        print("\n2. Testing NIFTY MIDCAP 150:")
+        midcap150 = fetcher.fetch_stocks_by_type('midcap150')
+        print(f"✅ Found {len(midcap150)} MIDCAP 150 stocks")
+        
+        print("\n3. Testing Combined:")
+        combined = fetcher.fetch_stocks_by_type('combined')
+        print(f"✅ Found {len(combined)} combined stocks")
+        
+        print("\n4. Testing Database Stats:")
+        stats = fetcher.get_database_stats()
+        print(f"✅ Stats: {stats}")
+        
+        print("\n🎉 All tests passed!")
+        return True
+        
+    except Exception as e:
+        print(f"❌ Test failed: {e}")
+        return False
+
+if __name__ == "__main__":
+    # Run tests
+    test_database_connection()).execute()
+            midcap150_count = self.supabase.table('stock_universe').select('id').eq('index_type', 'NIFTY_MIDCAP_150').eq('is_active', True
