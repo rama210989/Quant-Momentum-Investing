@@ -356,23 +356,23 @@ with tab1:
     
     # Show data source options based on database availability
     if DATABASE_AVAILABLE and FETCHER_IMPORTED:
-        st.success("✅ Database connection available")
-        
-        col1, col2 = st.columns(2)
+    st.success("✅ Google Sheets connection available")
+    
+    col1, col2 = st.columns(2)
         
         with col1:
-            data_source = st.selectbox(
-                "Select Data Source",
-                ["Database: NIFTY 100 + MIDCAP 150", "Database: NIFTY 100 Only", "Database: MIDCAP 150 Only", "Upload CSV File"],
-                index=0
-            )
+        data_source = st.selectbox(
+            "Select Data Source",
+            ["Google Sheets: NIFTY 100 + MIDCAP 150", "Google Sheets: NIFTY 100 Only", "Google Sheets: MIDCAP 150 Only", "Upload CSV File"],
+            index=0
+        )
         
         with col2:
             st.info(f"""
             **Analysis Settings:**
             - Period: {month_labels[0]} to {month_labels[-1]}
             - Rolling Window: 11 months
-            - Data Source: {'Database' if 'Database' in data_source else 'CSV Upload'}
+            - Data Source: {'Google Sheets' if 'Google Sheets' in data_source else 'CSV Upload'}
             """)
         
         # Handle data source selection
@@ -400,18 +400,18 @@ with tab1:
         
         else:
             # Fetch from database
-            if st.button("🔄 Fetch Data from Database", type="primary"):
+            if st.button("🔄 Fetch Data from Google Sheets", type="primary"):
                 try:
-                    with st.spinner("Fetching data from database..."):
-                        if data_source == "Database: NIFTY 100 + MIDCAP 150":
+                    with st.spinner("Fetching data from Google Sheets..."):
+                        if data_source == "Google Sheets: NIFTY 100 + MIDCAP 150":
                             stock_data = fetch_stock_data_cache("combined")
-                        elif data_source == "Database: NIFTY 100 Only":
+                        elif data_source == "Google Sheets: NIFTY 100 Only":
                             stock_data = fetch_stock_data_cache("nifty100")
-                        elif data_source == "Database: MIDCAP 150 Only":
+                        elif data_source == "Google Sheets: MIDCAP 150 Only":
                             stock_data = fetch_stock_data_cache("midcap150")
                         
                         st.session_state.stock_data = stock_data
-                        st.success(f"✅ Fetched {len(stock_data)} stocks from database")
+                        st.success(f"✅ Fetched {len(stock_data)} stocks from Google Sheets")
                         
                         st.subheader("📋 Sample Stock Data")
                         st.dataframe(stock_data.head(10), use_container_width=True)
@@ -419,7 +419,7 @@ with tab1:
                         st.subheader("📊 Data Summary")
                         st.write(f"**Total Stocks:** {len(stock_data)}")
                         st.write(f"**Unique Companies:** {stock_data['Company Name'].nunique()}")
-                        st.write(f"**Data Source:** Database")
+                        st.write(f"**Data Source:** Google Sheets")
                         
                 except Exception as e:
                     st.error(f"❌ Error fetching data from database: {e}")
@@ -775,6 +775,6 @@ st.divider()
 st.markdown("**📈 Stock Momentum & FIP Analysis App** | Built with Streamlit")
 
 if DATABASE_AVAILABLE:
-    st.markdown("🟢 **Database Status:** Connected")
+    st.markdown("🟢 **Google Sheets Status:** Connected")
 else:
-    st.markdown("🟡 **Database Status:** CSV Upload Mode")
+    st.markdown("🟡 **Google Sheets Status:** CSV Upload Mode")
