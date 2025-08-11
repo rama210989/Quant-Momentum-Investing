@@ -13,6 +13,36 @@ import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
+def run_data_update():
+    """Run the NIFTY 250 scraper to update Google Sheets"""
+    try:
+        from nifty250_scraper import NIFTY250Scraper
+        
+        with st.spinner("🚀 Updating NIFTY 250 data from NSE..."):
+            scraper = NIFTY250Scraper()
+            success = scraper.run_full_scrape()
+            
+            if success:
+                st.success("✅ Data updated successfully!")
+                st.balloons()
+                
+                # Clear cache to force fresh data load
+                st.cache_data.clear()
+                
+                # Show update summary
+                st.info("📊 Your Google Sheet has been updated with fresh NIFTY 250 data")
+                return True
+            else:
+                st.error("❌ Data update failed. Check logs for details.")
+                return False
+                
+    except ImportError as e:
+        st.error(f"❌ Scraper module not found: {e}")
+        return False
+    except Exception as e:
+        st.error(f"❌ Error during data update: {e}")
+        return False
+
 # Import stock data fetcher with error handling
 try:
     from stock_data_fetcher import (
@@ -357,7 +387,26 @@ with tab1:
     # Show data source options based on Google Sheets availability
     if DATABASE_AVAILABLE and FETCHER_IMPORTED:
         st.success("✅ Google Sheets connection available")
-        
+
+        st.divider()
+        st.subheader("🔄 Update Stock Data")
+    
+        col1, col2 = st.columns([2, 1])
+    
+        with col1:
+            st.info("""
+            **Update NIFTY 250 Data:**
+            - Fetches latest constituents from NSE
+            - Updates Google Sheets automatically
+            - Recommended: Update monthly or before rebalancing
+            """)
+    
+        with col2:
+            if st.button("🚀 Update Data from NSE", type="secondary", use_container_width=True):
+                run_data_update()
+    
+        st.divider()
+    
         col1, col2 = st.columns(2)
         
         with col1:
