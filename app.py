@@ -341,12 +341,12 @@ else:
     st.sidebar.write(f"**{next_rebalancing['month']} {next_rebalancing['year']}**")
     st.sidebar.write(f"⏰ **{next_rebalancing['days_until']} days to go**")
 
-# Database status in sidebar
+# Google Sheets status in sidebar
 st.sidebar.divider()
 if FETCHER_IMPORTED:
     show_database_status()
 else:
-    st.sidebar.error("❌ Database module not loaded")
+    st.sidebar.error("❌ Google Sheets module not loaded")
 
 # Create main tab structure
 tab1, tab2, tab3, tab4 = st.tabs(["📊 Fetch Data", "📋 All Results", "🎯 Top 25 Stable Stocks", "🔔 Alerts"])
@@ -354,18 +354,18 @@ tab1, tab2, tab3, tab4 = st.tabs(["📊 Fetch Data", "📋 All Results", "🎯 T
 with tab1:
     st.header("📊 Fetch Stock Data")
     
-    # Show data source options based on database availability
+    # Show data source options based on Google Sheets availability
     if DATABASE_AVAILABLE and FETCHER_IMPORTED:
-    st.success("✅ Google Sheets connection available")
-    
-    col1, col2 = st.columns(2)
+        st.success("✅ Google Sheets connection available")
+        
+        col1, col2 = st.columns(2)
         
         with col1:
-        data_source = st.selectbox(
-            "Select Data Source",
-            ["Google Sheets: NIFTY 100 + MIDCAP 150", "Google Sheets: NIFTY 100 Only", "Google Sheets: MIDCAP 150 Only", "Upload CSV File"],
-            index=0
-        )
+            data_source = st.selectbox(
+                "Select Data Source",
+                ["Google Sheets: NIFTY 100 + MIDCAP 150", "Google Sheets: NIFTY 100 Only", "Google Sheets: MIDCAP 150 Only", "Upload CSV File"],
+                index=0
+            )
         
         with col2:
             st.info(f"""
@@ -399,7 +399,7 @@ with tab1:
                     st.error(f"❌ Error reading CSV file: {e}")
         
         else:
-            # Fetch from database
+            # Fetch from Google Sheets
             if st.button("🔄 Fetch Data from Google Sheets", type="primary"):
                 try:
                     with st.spinner("Fetching data from Google Sheets..."):
@@ -422,15 +422,15 @@ with tab1:
                         st.write(f"**Data Source:** Google Sheets")
                         
                 except Exception as e:
-                    st.error(f"❌ Error fetching data from database: {e}")
+                    st.error(f"❌ Error fetching data from Google Sheets: {e}")
                     st.info("💡 Please try uploading a CSV file instead")
     
     else:
-        # Database not available - CSV upload only
+        # Google Sheets not available - CSV upload only
         if FETCHER_IMPORTED:
-            st.warning("⚠️ Database connection not available. Please upload CSV files.")
+            st.warning("⚠️ Google Sheets connection not available. Please upload CSV files.")
         else:
-            st.warning("⚠️ Database module not loaded. Please upload CSV files.")
+            st.warning("⚠️ Google Sheets module not loaded. Please upload CSV files.")
         
         st.subheader("📁 Upload CSV File")
         st.info("📋 **Required columns:** Symbol, Company Name, ISIN Code")
@@ -484,7 +484,7 @@ with tab1:
                 st.metric("Analysis Status", "⏳ Pending")
     
     else:
-        st.info("👆 Please fetch data from database or upload a CSV file to continue")
+        st.info("👆 Please fetch data from Google Sheets or upload a CSV file to continue")
 
 with tab2:
     st.header("📋 All Results")
@@ -778,3 +778,8 @@ if DATABASE_AVAILABLE:
     st.markdown("🟢 **Google Sheets Status:** Connected")
 else:
     st.markdown("🟡 **Google Sheets Status:** CSV Upload Mode")
+    
+
+
+
+
